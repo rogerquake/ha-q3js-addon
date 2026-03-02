@@ -1,0 +1,6 @@
+#!/usr/bin/with-contenv bashio
+bashio::log.info "Q3JS stopping — killing child processes..."
+pkill -f ioq3ded      2>/dev/null || true
+pkill -f "node index" 2>/dev/null || true
+pkill -f q3js-metrics 2>/dev/null || true
+bashio::log.info "Q3JS stopped."

@@ -1,0 +1,184 @@
+#!/usr/bin/env node
+/**
+ * Q3JS Metrics Server
+ * Tails the ioq3ded game log, parses match events, and exposes a JSON HTTP API.
+ *
+ * Endpoints:
+ *   GET  /api/metrics  — full match state + leaderboard
+ *   GET  /api/health   — liveness check (used by integration config flow)
+ *   POST /api/rcon     — forward a command to ioq3ded via UDP rcon
+ */
+
+"use strict";
+
+const http  = require("http");
+const fs    = require("fs");
+const dgram = require("dgram");
+
+// ── Config ────────────────────────────────────────────────────────────────────
+const LOG_FILE  = process.env.Q3_LOG_FILE    || "/var/log/q3js/game.log";
+const PORT      = parseInt(process.env.METRICS_PORT || "8090", 10);
+const SPECTATOR = process.env.SPECTATOR_NAME || "HA_Spectator";
+const RCON_PASS = process.env.RCON_PASS      || "homeassistant";
+const Q3_PORT   = 27960;
+const Q3_HOST   = "127.0.0.1";
+
+// ── State ─────────────────────────────────────────────────────────────────────
+const state = {
+  match_active:        false,
+  map_name:            "unknown",
+  match_time_seconds:  0,
+  match_start_epoch:   /** @type {number|null} */ (null),
+  players:             /** @type {Record<string,{frags:number,deaths:number}>} */ ({}),
+  last_updated:        /** @type {string|null} */ (null),
+};
+
+// ── Log watcher ───────────────────────────────────────────────────────────────
+let logPos = 0;
+
+function parseChunk(text) {
+  for (const raw of text.split("\n")) {
+    const l = raw.trim();
+    if (!l) continue;
+
+    // New game
+    if (l.startsWith("InitGame:")) {
+      const m = l.match(/\\mapname\\([^\\]+)/);
+      state.map_name           = m ? m[1] : "unknown";
+      state.match_active       = true;
+      state.match_start_epoch  = Date.now();
+      state.match_time_seconds = 0;
+      state.players            = {};
+      console.log(`[GAME] Started: ${state.map_name}`);
+    }
+
+    // Game over
+    if (l.startsWith("ShutdownGame:")) {
+      state.match_active = false;
+      console.log("[GAME] Ended");
+    }
+
+    // Player joined / renamed
+    const ci = l.match(/^ClientUserinfoChanged:\s+\d+\s+n\\([^\\]+)/);
+    if (ci) state.players[ci[1]] ??= { frags: 0, deaths: 0 };
+
+    // Kill event
+    const kill = l.match(/^Kill:\s+\d+\s+\d+\s+\d+:\s+(.+?)\s+killed\s+(.+?)\s+by\s+/);
+    if (kill) {
+      const [, killer, victim] = kill;
+      state.players[killer] ??= { frags: 0, deaths: 0 };
+      state.players[victim] ??= { frags: 0, deaths: 0 };
+      if (killer === "<world>") {
+        state.players[victim].frags = Math.max(0, state.players[victim].frags - 1);
+        state.players[victim].deaths++;
+      } else {
+        state.players[killer].frags++;
+        state.players[victim].deaths++;
+      }
+    }
+
+    // End-of-round authoritative score
+    const sc = l.match(/^score:\s+(-?\d+)\s+ping:\s+\d+\s+client:\s+\d+\s+(.+)$/);
+    if (sc && sc[2] !== "<world>") {
+      state.players[sc[2]] ??= { frags: 0, deaths: 0 };
+      state.players[sc[2]].frags = parseInt(sc[1], 10);
+    }
+  }
+  state.last_updated = new Date().toISOString();
+}
+
+function watchLog() {
+  if (!fs.existsSync(LOG_FILE)) {
+    console.log(`[LOG] Waiting for: ${LOG_FILE}`);
+    return setTimeout(watchLog, 3000);
+  }
+  logPos = fs.statSync(LOG_FILE).size;
+  console.log(`[LOG] Watching ${LOG_FILE}`);
+  fs.watchFile(LOG_FILE, { interval: 500 }, (curr) => {
+    if (curr.size < logPos) logPos = 0;
+    if (curr.size <= logPos) return;
+    const fd  = fs.openSync(LOG_FILE, "r");
+    const len = curr.size - logPos;
+    const buf = Buffer.alloc(len);
+    fs.readSync(fd, buf, 0, len, logPos);
+    fs.closeSync(fd);
+    logPos = curr.size;
+    parseChunk(buf.toString("utf8"));
+  });
+}
+
+// ── Match timer ───────────────────────────────────────────────────────────────
+setInterval(() => {
+  if (state.match_active && state.match_start_epoch) {
+    state.match_time_seconds = Math.floor((Date.now() - state.match_start_epoch) / 1000);
+  }
+}, 5000);
+
+// ── Helpers ───────────────────────────────────────────────────────────────────
+function leaderboard() {
+  return Object.entries(state.players)
+    .filter(([n]) => n !== "<world>")
+    .map(([name, d]) => ({ name, frags: d.frags, deaths: d.deaths }))
+    .sort((a, b) => b.frags - a.frags);
+}
+
+function fmt(s) {
+  return `${String(Math.floor(s / 60)).padStart(2, "0")}:${String(s % 60).padStart(2, "0")}`;
+}
+
+function payload() {
+  return {
+    map_name:             state.map_name,
+    match_active:         state.match_active,
+    match_time_seconds:   state.match_time_seconds,
+    match_time_formatted: fmt(state.match_time_seconds),
+    leaderboard:          leaderboard(),
+    spectator_name:       SPECTATOR,
+    last_updated:         state.last_updated || new Date().toISOString(),
+  };
+}
+
+function sendRcon(command) {
+  const sock   = dgram.createSocket("udp4");
+  const packet = Buffer.from(`\xff\xff\xff\xffrcon ${RCON_PASS} ${command}`);
+  sock.send(packet, Q3_PORT, Q3_HOST, () => sock.close());
+  console.log(`[RCON] ${command}`);
+}
+
+// ── HTTP server ───────────────────────────────────────────────────────────────
+http.createServer((req, res) => {
+  res.setHeader("Access-Control-Allow-Origin",  "*");
+  res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
+  res.setHeader("Access-Control-Allow-Headers", "*");
+
+  if (req.method === "OPTIONS") { res.writeHead(204); return res.end(); }
+
+  if (req.method === "GET" && (req.url === "/api/metrics" || req.url === "/")) {
+    res.writeHead(200, { "Content-Type": "application/json" });
+    return res.end(JSON.stringify(payload()));
+  }
+
+  if (req.method === "GET" && req.url === "/api/health") {
+    res.writeHead(200, { "Content-Type": "application/json" });
+    return res.end(JSON.stringify({ status: "ok", addon: "q3js" }));
+  }
+
+  if (req.method === "POST" && req.url === "/api/rcon") {
+    let body = "";
+    req.on("data", (d) => (body += d));
+    req.on("end", () => {
+      try { const { command } = JSON.parse(body); if (command) sendRcon(command); }
+      catch { /* ignore malformed */ }
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ ok: true }));
+    });
+    return;
+  }
+
+  res.writeHead(404);
+  res.end("Not found");
+}).listen(PORT, "0.0.0.0", () => console.log(`[Q3JS Metrics] :${PORT}`));
+
+// ── Boot ──────────────────────────────────────────────────────────────────────
+console.log("[Q3JS Metrics] Starting...");
+watchLog();

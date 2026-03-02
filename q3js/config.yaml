@@ -1,0 +1,47 @@
+---
+name: "Q3JS - Quake III Arena"
+description: "Run a Quake III Arena dedicated server inside Home Assistant with live game metrics."
+version: "0.1.0"
+slug: "q3js"
+init: false
+arch:
+  - amd64
+  - aarch64
+startup: application
+boot: auto
+map:
+  - share:rw
+ports:
+  27960/udp: 27960
+  27961/tcp: 27961
+  8090/tcp: 8090
+ports_description:
+  27960/udp: "Quake 3 game port (UDP)"
+  27961/tcp: "WebSocket proxy for browser clients"
+  8090/tcp: "Metrics HTTP API"
+options:
+  map_name: "q3dm17"
+  frag_limit: 30
+  time_limit: 20
+  rcon_password: "homeassistant"
+  spectator_name: "HA_Spectator"
+  bots:
+    - name: "Keel"
+      skill: 3
+    - name: "Sarge"
+      skill: 3
+schema:
+  map_name: str
+  frag_limit: int
+  time_limit: int
+  rcon_password: str
+  spectator_name: str
+  bots:
+    - name: str
+      skill: "int(1,5)"
+panel_icon: "mdi:gamepad-variant"
+panel_title: "Q3JS"
+ingress: true
+ingress_port: 8090
+homeassistant_api: false
+image: "ghcr.io/rogerquake/ha-q3js-addon/{arch}"
