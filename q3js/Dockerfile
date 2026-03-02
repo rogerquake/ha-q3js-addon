@@ -1,6 +1,7 @@
 ARG BUILD_FROM
 FROM $BUILD_FROM
 
+# ── System dependencies ───────────────────────────────────────────────────────
 RUN apk add --no-cache \
     nodejs \
     npm \
@@ -11,24 +12,45 @@ RUN apk add --no-cache \
     git \
     bash \
     curl \
-    python3
+    python3 \
+    sdl2-dev \
+    libc-dev \
+    linux-headers
 
-WORKDIR /opt/q3js
+# ── Build ioq3ded from ioquake3 directly ─────────────────────────────────────
+# Clone ioq3 directly (no submodule needed)
+RUN git clone --depth 1 https://github.com/ioquake/ioq3.git /opt/ioq3
 
-# Clone q3js (server + WebSocket proxy only)
-RUN git clone --depth 1 https://github.com/lklacar/q3js.git . \
-    && git submodule update --init --recursive ioq3
+WORKDIR /opt/ioq3/build
 
-# Build native dedicated server
-RUN cd server && chmod +x build.sh && ./build.sh
+RUN cmake .. \
+    -DBUILD_SERVER=ON \
+    -DBUILD_CLIENT=OFF \
+    -DBUILD_RENDERER_OPENGL1=OFF \
+    -DBUILD_RENDERER_OPENGL2=OFF \
+    -DBUILD_GAME_LIBRARIES=ON \
+    -DBUILD_GAME_QVMS=OFF \
+    -DUSE_OPENAL=OFF \
+    -DUSE_CODEC_VORBIS=OFF \
+    -DUSE_CODEC_OPUS=OFF \
+    -DUSE_MUMBLE=OFF \
+    -DUSE_VOIP=OFF \
+    -DUSE_FREETYPE=OFF \
+    -DUSE_CURL=OFF \
+    -DCMAKE_BUILD_TYPE=Release \
+    && make -j$(nproc) ioq3ded
 
-# Install WebSocket proxy dependencies
-RUN cd server/ws-udp-proxy && npm install --production --no-audit
+RUN mkdir -p /opt/q3js/server/build/Release/baseq3 \
+    && cp /opt/ioq3/build/ioq3ded /opt/q3js/server/build/Release/ioq3ded
 
-# Placeholder for pak files
-RUN mkdir -p /opt/q3js/server/build/Release/baseq3
+# ── WebSocket proxy ───────────────────────────────────────────────────────────
+RUN git clone --depth 1 https://github.com/lklacar/q3js.git /opt/q3js-src
 
-# Copy rootfs overlay
+RUN cp -r /opt/q3js-src/proxy /opt/q3js/server/ws-udp-proxy \
+    && cd /opt/q3js/server/ws-udp-proxy \
+    && npm install --production --no-audit
+
+# ── rootfs overlay ────────────────────────────────────────────────────────────
 COPY rootfs /
 
 RUN chmod a+x \
