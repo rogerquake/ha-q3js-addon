@@ -1,7 +1,8 @@
 #!/usr/bin/with-contenv bashio
 # ==============================================================================
 # Q3JS Add-on — service entrypoint
-# Starts: ioq3ded → ws-udp-proxy → metrics server
+# Uses unknown-gd/quakejs (Node.js port of ioquake3, no C compilation)
+# Starts: ioq3ded.js → wssproxy.js → content.js → metrics server
 # ==============================================================================
 
 MAP_NAME=$(bashio::config 'map_name')
@@ -10,69 +11,91 @@ TIME_LIMIT=$(bashio::config 'time_limit')
 RCON_PASS=$(bashio::config 'rcon_password')
 SPECTATOR_NAME=$(bashio::config 'spectator_name')
 
-Q3_BASE="/opt/q3js/server/build/Release"
+Q3_DIR="/opt/quakejs"
 LOG_DIR="/var/log/q3js"
 GAME_LOG="${LOG_DIR}/game.log"
 
 mkdir -p "${LOG_DIR}"
 
 bashio::log.info "========================================="
-bashio::log.info " Q3JS - Quake III Arena"
+bashio::log.info " Q3JS - Quake III Arena (QuakeJS/Node)"
 bashio::log.info "========================================="
 bashio::log.info "Map       : ${MAP_NAME}"
 bashio::log.info "Frag limit: ${FRAG_LIMIT}"
 bashio::log.info "Time limit: ${TIME_LIMIT}m"
-bashio::log.info "Spectator : ${SPECTATOR_NAME}"
 
 # Copy user pak files from /share/q3js/baseq3 if present
 if bashio::fs.directory_exists "/share/q3js/baseq3"; then
     bashio::log.info "Copying pak files from /share/q3js/baseq3..."
-    cp /share/q3js/baseq3/*.pk3 "${Q3_BASE}/baseq3/" 2>/dev/null || true
+    cp /share/q3js/baseq3/*.pk3 "${Q3_DIR}/base/baseq3/" 2>/dev/null || true
 else
-    bashio::log.warning "No pak files at /share/q3js/baseq3 — shareware assets only."
+    bashio::log.warning "No pak files at /share/q3js/baseq3 — content server will auto-download demo assets."
 fi
 
-# Build addbot commands from config array
-BOT_CMDS=""
+# ── Write server.cfg ──────────────────────────────────────────────────────────
+SERVER_CFG="${Q3_DIR}/base/baseq3/server.cfg"
+cat > "${SERVER_CFG}" << EOF
+seta sv_hostname "HA QuakeJS Server"
+seta sv_maxclients 12
+seta g_motd "Home Assistant Quake 3"
+seta g_gametype 0
+seta fraglimit ${FRAG_LIMIT}
+seta timelimit ${TIME_LIMIT}
+seta rconpassword "${RCON_PASS}"
+seta g_log "${GAME_LOG}"
+seta g_logSync 1
+seta bot_enable 1
+EOF
+
+# Add bot commands
 BOT_COUNT=$(bashio::config 'bots | length')
 for i in $(seq 0 $((BOT_COUNT - 1))); do
     BOT_NAME=$(bashio::config "bots[${i}].name")
     BOT_SKILL=$(bashio::config "bots[${i}].skill")
-    BOT_CMDS="${BOT_CMDS}+addbot ${BOT_NAME} ${BOT_SKILL} "
+    echo "addbot ${BOT_NAME} ${BOT_SKILL}" >> "${SERVER_CFG}"
     bashio::log.info "Bot: ${BOT_NAME} (skill ${BOT_SKILL})"
 done
 
-# ── 1. ioq3ded ────────────────────────────────────────────────────────────────
-bashio::log.info "Starting ioq3ded..."
-"${Q3_BASE}/ioq3ded" \
+# Write web.json for the content server pointing to localhost
+cat > "${Q3_DIR}/bin/web.json" << EOF
+{
+  "content": "http://localhost:9000",
+  "contentPort": 9000
+}
+EOF
+
+# ── 1. Content server (serves pak files to browser clients) ──────────────────
+bashio::log.info "Starting content server on :9000..."
+cd "${Q3_DIR}"
+node bin/content.js > >(tee "${LOG_DIR}/content.log") 2>&1 &
+CONTENT_PID=$!
+bashio::log.info "Content server PID: ${CONTENT_PID}"
+sleep 2
+
+# ── 2. Dedicated server ───────────────────────────────────────────────────────
+bashio::log.info "Starting ioq3ded.js on :27960..."
+cd "${Q3_DIR}"
+node build/ioq3ded.js \
+    +set fs_game baseq3 \
     +set dedicated 1 \
-    +set sv_maxclients 12 \
-    +set fraglimit "${FRAG_LIMIT}" \
-    +set timelimit "${TIME_LIMIT}" \
-    +set rconPassword "${RCON_PASS}" \
-    +set g_log "${GAME_LOG}" \
-    +set g_logSync 1 \
-    +set bot_enable 1 \
+    +set fs_cdn "http://localhost:9000" \
     +map "${MAP_NAME}" \
-    ${BOT_CMDS} \
+    +exec server.cfg \
     > >(tee "${LOG_DIR}/server.log") 2>&1 &
 Q3_PID=$!
-bashio::log.info "ioq3ded PID: ${Q3_PID}"
+bashio::log.info "ioq3ded.js PID: ${Q3_PID}"
 sleep 3
 
-# ── 2. WebSocket proxy ────────────────────────────────────────────────────────
-bashio::log.info "Starting WebSocket proxy (ws:27961 → udp:27960)..."
-cd /opt/q3js/server/ws-udp-proxy
-Q3_HOST=127.0.0.1 \
-Q3_PORT=27960 \
-WS_PORT=27961 \
-RCON_PASS="${RCON_PASS}" \
-    node index.js > >(tee "${LOG_DIR}/proxy.log") 2>&1 &
+# ── 3. WebSocket proxy ────────────────────────────────────────────────────────
+bashio::log.info "Starting WSS proxy on :27961 → :27960..."
+cd "${Q3_DIR}"
+node bin/wssproxy.js \
+    > >(tee "${LOG_DIR}/proxy.log") 2>&1 &
 PROXY_PID=$!
-bashio::log.info "WebSocket proxy PID: ${PROXY_PID}"
+bashio::log.info "WSS proxy PID: ${PROXY_PID}"
 sleep 1
 
-# ── 3. Metrics server ─────────────────────────────────────────────────────────
+# ── 4. Metrics server ─────────────────────────────────────────────────────────
 bashio::log.info "Starting metrics server on :8090..."
 Q3_LOG_FILE="${GAME_LOG}" \
 METRICS_PORT=8090 \
@@ -82,5 +105,5 @@ SPECTATOR_NAME="${SPECTATOR_NAME}" \
 METRICS_PID=$!
 bashio::log.info "Metrics server PID: ${METRICS_PID}"
 
-bashio::log.info "All services running. Tailing ioq3ded..."
+bashio::log.info "All services running."
 wait ${Q3_PID}
