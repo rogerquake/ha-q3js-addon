@@ -148,13 +148,21 @@ cat > "${CERT_DIR}/config.json" << CERTEOF
 }
 CERTEOF
 
+
 # --------------------------------------------------------------------------
-# Copy pak assets from /share/q3js/assets if present
+# Copy pak assets from /share/q3js/assets into work dir
 # --------------------------------------------------------------------------
-mkdir -p "${WORK_DIR}/assets"
-if [ -d "/share/q3js/assets" ]; then
-    bashio::log.info "Copying assets from /share/q3js/assets..."
-    cp -rn /share/q3js/assets/. "${WORK_DIR}/assets/" 2>/dev/null || true
+mkdir -p "${WORK_DIR}/assets/baseq3"
+if [ -d "/share/q3js/assets/baseq3" ]; then
+    bashio::log.info "Copying baseq3 pak files from /share/q3js/assets/baseq3..."
+    cp -v /share/q3js/assets/baseq3/*.pk3 "${WORK_DIR}/assets/baseq3/" 2>&1 | while IFS= read -r line; do
+        bashio::log.info "  ${line}"
+    done
+    bashio::log.info "Assets in ${WORK_DIR}/assets/baseq3:"
+    ls -lh "${WORK_DIR}/assets/baseq3/" || true
+else
+    bashio::log.warning "No pak files found at /share/q3js/assets/baseq3/ — game will not load!"
+    bashio::log.warning "Copy pak0.pk3 - pak8.pk3 from your Q3A install to /share/q3js/assets/baseq3/"
 fi
 
 # --------------------------------------------------------------------------
