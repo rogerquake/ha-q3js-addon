@@ -1,7 +1,7 @@
 ---
 name: "Q3JS - Quake III Arena"
 description: "Run a Quake III Arena server in the browser using QuakeJS. Manages all game containers via Docker Compose."
-version: "0.7.2"
+version: "0.7.3"
 slug: "q3js"
 url: "https://github.com/rogerquake/ha-q3js-addon"
 init: false
