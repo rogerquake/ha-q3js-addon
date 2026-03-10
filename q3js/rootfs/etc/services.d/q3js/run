@@ -25,15 +25,24 @@ bashio::log.info "========================================="
 # --------------------------------------------------------------------------
 # Dynamically find the real host path for /share by inspecting this
 # addon's own container mounts via the Docker socket.
-# This works on any HA install (HAOS, supervised, etc.)
+# Uses hostname (which equals container ID in Docker) as fallback.
 # --------------------------------------------------------------------------
-CONTAINER_ID=$(grep -o '[a-f0-9]\{64\}' /proc/self/cgroup 2>/dev/null | head -1)
+HOST_SHARE=""
+
+# Try cgroup v1 style (64-char hex ID)
+CONTAINER_ID=$(grep -o '[a-f0-9]\{64\}' /proc/self/cgroup 2>/dev/null | head -1 || true)
+
+# Fallback: on cgroup v2 (HAOS), hostname IS the short container ID
+if [ -z "${CONTAINER_ID}" ]; then
+    CONTAINER_ID=$(hostname 2>/dev/null || true)
+fi
+
 bashio::log.info "Addon container ID: ${CONTAINER_ID}"
 
-HOST_SHARE=""
 if [ -n "${CONTAINER_ID}" ]; then
     HOST_SHARE=$(docker inspect "${CONTAINER_ID}" \
-        --format '{{range .Mounts}}{{if eq .Destination "/share"}}{{.Source}}{{end}}{{end}}' 2>/dev/null)
+        --format '{{range .Mounts}}{{if eq .Destination "/share"}}{{.Source}}{{end}}{{end}}' \
+        2>/dev/null || true)
 fi
 
 if [ -z "${HOST_SHARE}" ]; then
