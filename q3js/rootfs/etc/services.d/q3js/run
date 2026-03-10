@@ -11,7 +11,6 @@ GAMEMODE=$(bashio::config 'gamemode')
 RESTART_HOURS=$(bashio::config 'restart_hours')
 
 WORK_DIR="/share/quakejs-dockerized-ssl"
-HOST_WORK_DIR="/mnt/data/supervisor/share/quakejs-dockerized-ssl"
 LOG_DIR="/var/log/q3js"
 GAME_LOG="${LOG_DIR}/game.log"
 
@@ -23,7 +22,32 @@ bashio::log.info " Q3JS - Quake III Arena"
 bashio::log.info " (unknown-gd/quakejs-dockerized-ssl)"
 bashio::log.info "========================================="
 
+# --------------------------------------------------------------------------
+# Dynamically find the real host path for /share by inspecting this
+# addon's own container mounts via the Docker socket.
+# This works on any HA install (HAOS, supervised, etc.)
+# --------------------------------------------------------------------------
+CONTAINER_ID=$(grep -o '[a-f0-9]\{64\}' /proc/self/cgroup 2>/dev/null | head -1)
+bashio::log.info "Addon container ID: ${CONTAINER_ID}"
+
+HOST_SHARE=""
+if [ -n "${CONTAINER_ID}" ]; then
+    HOST_SHARE=$(docker inspect "${CONTAINER_ID}" \
+        --format '{{range .Mounts}}{{if eq .Destination "/share"}}{{.Source}}{{end}}{{end}}' 2>/dev/null)
+fi
+
+if [ -z "${HOST_SHARE}" ]; then
+    bashio::log.warning "Could not auto-detect host share path, falling back to /mnt/data/supervisor/share"
+    HOST_SHARE="/mnt/data/supervisor/share"
+fi
+
+HOST_WORK_DIR="${HOST_SHARE}/quakejs-dockerized-ssl"
+bashio::log.info "Host share path: ${HOST_SHARE}"
+bashio::log.info "Host work dir:   ${HOST_WORK_DIR}"
+
+# --------------------------------------------------------------------------
 # Always re-clone to ensure Dockerfiles are unpatched before we patch them
+# --------------------------------------------------------------------------
 if [ -d "${WORK_DIR}/.git" ]; then
     bashio::log.info "Removing old clone for fresh start..."
     rm -rf "${WORK_DIR}/.git" "${WORK_DIR}/build"
@@ -34,9 +58,9 @@ git clone --depth 1 https://github.com/unknown-gd/quakejs-dockerized-ssl.git "${
 cd "${WORK_DIR}" || bashio::exit.nok "Failed to enter work dir"
 
 # --------------------------------------------------------------------------
-# Patch ALL Dockerfiles: use awk to insert sed before npm install lines.
-# quakejs-files was removed from npm — must be stripped from package.json
-# inside the Docker build container before npm install runs.
+# Patch ALL Dockerfiles: use awk to insert a sed line before every
+# npm install step, removing quakejs-files from package.json inside
+# the build container (where the file actually lives after git clone).
 # --------------------------------------------------------------------------
 bashio::log.info "Patching Dockerfiles to remove quakejs-files..."
 find "${WORK_DIR}/build" -name "Dockerfile" | while read -r DF; do
@@ -47,7 +71,7 @@ find "${WORK_DIR}/build" -name "Dockerfile" | while read -r DF; do
         }
         print
     }' "${DF}" > "${DF}.patched" && mv "${DF}.patched" "${DF}"
-    bashio::log.info "Done: $(grep -c 'quakejs-files' "${DF}") quakejs-files lines now in ${DF}"
+    bashio::log.info "  quakejs-files patch lines in file: $(grep -c 'quakejs-files' "${DF}")"
 done
 
 bashio::log.info "Pruning Docker build cache..."
@@ -124,7 +148,7 @@ Q3JS_SERVER_RESTART_HOURS=${RESTART_HOURS}
 ENVEOF
 
 # --------------------------------------------------------------------------
-# Write docker-compose.override.yml with real host paths for all volumes
+# Write docker-compose.override.yml using the detected real host paths
 # --------------------------------------------------------------------------
 bashio::log.info "Writing docker-compose.override.yml..."
 cat > "${WORK_DIR}/docker-compose.override.yml" << OVERRIDE
@@ -147,6 +171,9 @@ services:
     volumes:
       - ${HOST_WORK_DIR}/config/certificates:/app/certificates:ro
 OVERRIDE
+
+bashio::log.info "docker-compose.override.yml written:"
+cat "${WORK_DIR}/docker-compose.override.yml"
 
 # --------------------------------------------------------------------------
 # Build and start via docker compose
