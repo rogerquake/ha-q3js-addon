@@ -1,7 +1,7 @@
 ---
 name: "Q3JS - Quake III Arena"
-description: "Run a Quake III Arena server in Home Assistant using QuakeJS (Node.js port)."
-version: "0.2.0"
+description: "Run a Quake III Arena server in Home Assistant using QuakeJS (unknown-gd/quakejs-dockerized-ssl)."
+version: "0.3.0"
 slug: "q3js"
 init: false
 arch:
@@ -12,21 +12,23 @@ boot: auto
 map:
   - share:rw
 ports:
-  27960/tcp: 27960
   27961/tcp: 27961
   9000/tcp: 9000
+  8080/tcp: 8080
   8090/tcp: 8090
 ports_description:
-  27960/tcp: "QuakeJS dedicated server"
-  27961/tcp: "WebSocket proxy (browser clients)"
+  27961/tcp: "WSS proxy (browser game clients)"
   9000/tcp: "Content/asset server"
-  8090/tcp: "Metrics HTTP API"
+  8080/tcp: "Web client UI"
+  8090/tcp: "Metrics HTTP API (used by HA integration)"
 options:
   map_name: "q3dm17"
-  frag_limit: 30
-  time_limit: 20
+  gamemode: "baseq3"
+  frag_limit: 25
+  time_limit: 15
   rcon_password: "homeassistant"
   spectator_name: "HA_Spectator"
+  restart_hours: 8
   bots:
     - name: "Keel"
       skill: 3
@@ -34,10 +36,12 @@ options:
       skill: 3
 schema:
   map_name: str
+  gamemode: str
   frag_limit: int
   time_limit: int
   rcon_password: str
   spectator_name: str
+  restart_hours: int
   bots:
     - name: str
       skill: "int(1,5)"
