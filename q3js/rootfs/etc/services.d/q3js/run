@@ -12,7 +12,7 @@ RESTART_HOURS=$(bashio::config 'restart_hours')
 
 WORK_DIR="/share/quakejs-dockerized-ssl"
 LOG_DIR="/var/log/q3js"
-GAME_LOG="${LOG_DIR}/game.log"
+GAME_LOG="${WORK_DIR}/game.log"
 
 mkdir -p "${LOG_DIR}"
 
@@ -46,6 +46,18 @@ fi
 HOST_WORK_DIR="${HOST_SHARE}/quakejs-dockerized-ssl"
 bashio::log.info "Host share path: ${HOST_SHARE}"
 bashio::log.info "Host work dir:   ${HOST_WORK_DIR}"
+
+# --------------------------------------------------------------------------
+# Detect host LAN IP (avoids HSTS issues with homeassistant.local)
+# --------------------------------------------------------------------------
+HOST_IP=$(ip route get 1.1.1.1 2>/dev/null | awk '{for(i=1;i<=NF;i++) if ($i=="src") print $(i+1)}' | head -1 || true)
+if [ -z "${HOST_IP}" ]; then
+    HOST_IP=$(hostname -I 2>/dev/null | awk '{print $1}' || true)
+fi
+if [ -z "${HOST_IP}" ]; then
+    HOST_IP="homeassistant.local"
+fi
+bashio::log.info "Detected host LAN IP: ${HOST_IP}"
 
 # --------------------------------------------------------------------------
 # Stop any running containers BEFORE wiping the work dir
@@ -82,14 +94,22 @@ bashio::log.info "Found compose file: ${COMPOSE_FILE}"
 
 # --------------------------------------------------------------------------
 # Patch compose.yml: replace ALL "./" volume paths with absolute host paths
-# so the host Docker daemon can resolve them correctly.
-# (Without this, host Docker resolves "./" as "/share/..." which is read-only)
 # --------------------------------------------------------------------------
 bashio::log.info "Patching compose.yml volume paths..."
 bashio::log.info "  Replacing './' with '${HOST_WORK_DIR}/'"
 sed -i "s|      - \./|      - ${HOST_WORK_DIR}/|g" "${COMPOSE_FILE}"
 bashio::log.info "Patched volume lines:"
 grep -n " - ${HOST_SHARE}" "${COMPOSE_FILE}" | head -20 || true
+
+# Add game log volume mount to dedicated server so metrics server can read it
+# Touch the log file first so the bind mount source exists
+touch "${WORK_DIR}/game.log"
+bashio::log.info "Patching dedicated server game log volume..."
+sed -i "/dedicated-server.*server\.cfg:\/app\/base\/cpma\/server\.cfg/{
+    a\      - ${HOST_WORK_DIR}/game.log:/app/game.log
+}" "${COMPOSE_FILE}"
+bashio::log.info "Dedicated server volumes:"
+grep -A5 "q3js-dedicated-server" "${COMPOSE_FILE}" | grep " - " || true
 
 # Remap port 443 -> 8443 (443 is taken by Nginx Proxy Manager)
 bashio::log.info "Remapping port 443 -> 8443 in compose.yml..."
@@ -126,7 +146,7 @@ if [ ! -f "${CERT_DIR}/q3js.crt" ]; then
     openssl req -x509 -nodes -days 3650 -newkey rsa:2048 \
         -keyout "${CERT_DIR}/q3js.key" \
         -out "${CERT_DIR}/q3js.crt" \
-        -subj "/CN=homeassistant.local" 2>/dev/null
+        -subj "/CN=${HOST_IP}" 2>/dev/null
 fi
 
 cat > "${CERT_DIR}/config.json" << CERTEOF
@@ -159,7 +179,7 @@ seta g_gametype 0
 seta fraglimit ${FRAG_LIMIT}
 seta timelimit ${TIME_LIMIT}
 seta rconpassword "${RCON_PASS}"
-seta g_log "${GAME_LOG}"
+seta g_log "/app/game.log"
 seta g_logSync 1
 seta bot_enable 1
 CFGEOF
@@ -179,7 +199,7 @@ cp "${WORK_DIR}/config/dedicated-server/baseq3/server.cfg" \
 # Write .env
 # --------------------------------------------------------------------------
 cat > "${WORK_DIR}/.env" << ENVEOF
-Q3JS_DOMAIN=homeassistant.local
+Q3JS_DOMAIN=${HOST_IP}
 Q3JS_SERVER_GAMEMODE=${GAMEMODE}
 Q3JS_SERVER_DEDICATED=1
 Q3JS_SERVER_RESTART_HOURS=${RESTART_HOURS}
@@ -205,15 +225,15 @@ bashio::log.info "Starting Q3JS containers..."
 docker compose -f "${COMPOSE_FILE}" up -d 2>&1 | tee "${LOG_DIR}/compose.log"
 
 bashio::log.info "Q3JS stack is up!"
-bashio::log.info "  Web client : https://homeassistant.local:8443"
-bashio::log.info "  WSS proxy  : wss://homeassistant.local:27961"
-bashio::log.info "  Content    : https://homeassistant.local:9000"
+bashio::log.info "  Web client : https://${HOST_IP}:8443"
+bashio::log.info "  WSS proxy  : wss://${HOST_IP}:27961"
+bashio::log.info "  Content    : https://${HOST_IP}:9000"
 
 # --------------------------------------------------------------------------
 # Start metrics server
 # --------------------------------------------------------------------------
 bashio::log.info "Starting metrics server on :8090..."
-Q3_LOG_FILE="${GAME_LOG}" \
+Q3_LOG_FILE="${WORK_DIR}/game.log" \
 METRICS_PORT=8090 \
 RCON_PASS="${RCON_PASS}" \
     /usr/bin/q3js-metrics > "${LOG_DIR}/metrics.log" 2>&1 &
