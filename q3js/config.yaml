@@ -1,8 +1,9 @@
 ---
 name: "Q3JS - Quake III Arena"
-description: "Run a Quake III Arena server using QuakeJS (unknown-gd/quakejs-dockerized-ssl) via Docker Compose."
-version: "0.4.0"
+description: "Run a Quake III Arena server in the browser using QuakeJS. Manages all game containers via Docker Compose."
+version: "0.5.0"
 slug: "q3js"
+url: "https://github.com/rogerquake/ha-q3js-addon"
 init: false
 arch:
   - amd64
@@ -13,7 +14,7 @@ map:
   - share:rw
   - data:rw
 docker_api: true
-privileged: true
+full_access: true
 ports:
   27961/tcp: 27961
   9000/tcp: 9000
@@ -22,8 +23,8 @@ ports:
 ports_description:
   27961/tcp: "WSS proxy (browser game clients)"
   9000/tcp: "Content/asset server"
-  443/tcp: "Web client UI"
-  8090/tcp: "Metrics HTTP API"
+  443/tcp: "Web client (HTTPS)"
+  8090/tcp: "Metrics HTTP API / Ingress"
 options:
   map_name: "q3dm17"
   gamemode: "baseq3"
@@ -50,4 +51,3 @@ panel_icon: "mdi:gamepad-variant"
 panel_title: "Q3JS"
 ingress: true
 ingress_port: 8090
-homeassistant_api: false
