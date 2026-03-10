@@ -4,7 +4,6 @@ description: "Run a Quake III Arena server in the browser using QuakeJS. Manages
 version: "1.0.0"
 slug: "q3js"
 url: "https://github.com/rogerquake/ha-q3js-addon"
-webui: "https://[HOST]:8443"
 init: false
 arch:
   - amd64
