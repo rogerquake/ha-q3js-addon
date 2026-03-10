@@ -48,11 +48,20 @@ bashio::log.info "Host share path: ${HOST_SHARE}"
 bashio::log.info "Host work dir:   ${HOST_WORK_DIR}"
 
 # --------------------------------------------------------------------------
-# Detect host LAN IP (avoids HSTS issues with homeassistant.local)
+# Detect host LAN IP via Supervisor API (avoids Docker network IPs)
 # --------------------------------------------------------------------------
-HOST_IP=$(ip route get 1.1.1.1 2>/dev/null | awk '{for(i=1;i<=NF;i++) if ($i=="src") print $(i+1)}' | head -1 || true)
+HOST_IP=$(curl -sf \
+    -H "Authorization: Bearer ${SUPERVISOR_TOKEN}" \
+    http://supervisor/network/interface/default/info \
+    | python3 -c "
+import json,sys
+d=json.load(sys.stdin)
+addrs=d.get('data',{}).get('ipv4',{}).get('address',[])
+if addrs: print(addrs[0].split('/')[0])
+" 2>/dev/null || true)
 if [ -z "${HOST_IP}" ]; then
-    HOST_IP=$(hostname -I 2>/dev/null | awk '{print $1}' || true)
+    bashio::log.warning "Supervisor API IP detection failed, trying ip route..."
+    HOST_IP=$(ip route get 8.8.8.8 2>/dev/null | awk '/via/{for(i=1;i<=NF;i++) if ($i=="src") print $(i+1)}' | head -1 || true)
 fi
 if [ -z "${HOST_IP}" ]; then
     HOST_IP="homeassistant.local"
@@ -102,7 +111,6 @@ bashio::log.info "Patched volume lines:"
 grep -n " - ${HOST_SHARE}" "${COMPOSE_FILE}" | head -20 || true
 
 # Add game log volume mount to dedicated server so metrics server can read it
-# Touch the log file first so the bind mount source exists
 touch "${WORK_DIR}/game.log"
 bashio::log.info "Patching dedicated server game log volume..."
 sed -i "/dedicated-server.*server\.cfg:\/app\/base\/cpma\/server\.cfg/{
