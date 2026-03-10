@@ -241,6 +241,7 @@ docker compose -f "${COMPOSE_FILE}" up -d 2>&1 | tee "${LOG_DIR}/compose.log"
 
 # --------------------------------------------------------------------------
 # Patch DirtyInstallers callback bug in dedicated server JS
+# (callback is called but not passed as parameter — crashes on manifest load)
 # --------------------------------------------------------------------------
 bashio::log.info "Waiting for dedicated server container to start..."
 for i in $(seq 1 30); do
@@ -263,29 +264,32 @@ bashio::log.info "  WSS proxy  : wss://${HOST_IP}:27961"
 bashio::log.info "  Content    : https://${HOST_IP}:9000"
 
 # --------------------------------------------------------------------------
-# Start metrics server
+# Pipe docker logs into game.log (g_log is relative inside container,
+# so we capture stdout which contains all game events)
 # --------------------------------------------------------------------------
-bashio::log.info "Starting metrics server on :8090..."
-Q3_LOG_FILE="${WORK_DIR}/game.log" \
-METRICS_PORT=8090 \
-RCON_PASS="${RCON_PASS}" \
-    /usr/bin/q3js-metrics > "${LOG_DIR}/metrics.log" 2>&1 &
-
-# --------------------------------------------------------------------------
-# Tail dedicated server logs into addon log for debugging
-# --------------------------------------------------------------------------
-bashio::log.info "Tailing dedicated server logs..."
+bashio::log.info "Starting docker log -> game.log pipe..."
 (
-    for i in $(seq 1 30); do
+    for i in $(seq 1 60); do
         if docker inspect -f "{{.State.Running}}" q3js-dedicated-server-1 2>/dev/null | grep -q true; then
             break
         fi
         sleep 2
     done
-    docker logs -f q3js-dedicated-server-1 2>&1 | while IFS= read -r line; do
+    bashio::log.info "Piping q3js-dedicated-server-1 logs to ${GAME_LOG}"
+    docker logs --since 1s -f q3js-dedicated-server-1 2>&1 | while IFS= read -r line; do
+        echo "${line}" >> "${GAME_LOG}"
         bashio::log.info "[q3ds] ${line}"
     done
 ) &
+
+# --------------------------------------------------------------------------
+# Start metrics server
+# --------------------------------------------------------------------------
+bashio::log.info "Starting metrics server on :8090..."
+Q3_LOG_FILE="${GAME_LOG}" \
+METRICS_PORT=8090 \
+RCON_PASS="${RCON_PASS}" \
+    /usr/bin/q3js-metrics > "${LOG_DIR}/metrics.log" 2>&1 &
 
 # Keep alive
 while true; do
