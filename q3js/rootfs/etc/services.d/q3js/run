@@ -41,7 +41,8 @@ cd "${WORK_DIR}" || bashio::exit.nok "Failed to enter work dir"
 bashio::log.info "Patching Dockerfiles: removing quakejs-files from npm install..."
 find "${WORK_DIR}/build" -name "Dockerfile" 2>/dev/null | while read -r DF; do
     if grep -q "npm install" "${DF}" && ! grep -q "quakejs-files" "${DF}"; then
-        sed -i 's|RUN npm install|RUN sed -i /"quakejs-files"/d package.json \&\& npm install|g' "${DF}"
+        # Match ANY line containing npm install and prepend the sed removal
+        sed -i 's|RUN \(.*\)npm install|RUN sed -i /"quakejs-files"/d package.json \&\& \1npm install|g' "${DF}"
         bashio::log.info "Patched ${DF}"
     fi
 done
