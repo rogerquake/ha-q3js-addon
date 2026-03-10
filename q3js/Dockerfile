@@ -14,7 +14,6 @@ RUN apk add --no-cache \
 # ── Clone quakejs once — shared by all services ───────────────────────────────
 WORKDIR /opt/quakejs
 RUN git clone --depth 1 https://github.com/unknown-gd/quakejs.git . \
-    && git submodule update --init \
     && npm install
 
 # ── Asset directory (pak files copied from /share at runtime) ─────────────────
