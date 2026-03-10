@@ -236,6 +236,25 @@ fi
 bashio::log.info "Starting Q3JS containers..."
 docker compose -f "${COMPOSE_FILE}" up -d 2>&1 | tee "${LOG_DIR}/compose.log"
 
+# --------------------------------------------------------------------------
+# Patch DirtyInstallers callback bug in dedicated server JS
+# (callback is called but not passed as parameter — crashes on manifest load)
+# --------------------------------------------------------------------------
+bashio::log.info "Waiting for dedicated server container to start..."
+for i in $(seq 1 30); do
+    if docker inspect -f "{{.State.Running}}" q3js-dedicated-server-1 2>/dev/null | grep -q true; then
+        break
+    fi
+    sleep 2
+done
+bashio::log.info "Patching DirtyInstallers callback bug in ioq3ded_secure.js..."
+docker exec q3js-dedicated-server-1 \
+    sed -i 's/return callback(/return (typeof callback === "function") \&\& callback(/g' \
+    /app/build/ioq3ded_secure.js 2>/dev/null && \
+    bashio::log.info "Patch applied — restarting dedicated server..." && \
+    docker restart q3js-dedicated-server-1 2>/dev/null || \
+    bashio::log.warning "Patch failed — dedicated server may not start correctly"
+
 bashio::log.info "Q3JS stack is up!"
 bashio::log.info "  Web client : https://${HOST_IP}:8443"
 bashio::log.info "  WSS proxy  : wss://${HOST_IP}:27961"
