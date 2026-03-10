@@ -34,47 +34,21 @@ git clone --depth 1 https://github.com/unknown-gd/quakejs-dockerized-ssl.git "${
 cd "${WORK_DIR}" || bashio::exit.nok "Failed to enter work dir"
 
 # --------------------------------------------------------------------------
-# Patch ALL Dockerfiles: inject sed to remove quakejs-files before npm install
-# quakejs-files was removed from npm and breaks every service build.
+# Patch ALL Dockerfiles: use awk to insert sed before npm install lines.
+# quakejs-files was removed from npm — must be stripped from package.json
+# inside the Docker build container before npm install runs.
 # --------------------------------------------------------------------------
-bashio::log.info "Scanning for Dockerfiles to patch..."
-python3 << PYEOF
-import os, re, sys
-
-build_dir = "${WORK_DIR}/build"
-patched = 0
-
-if not os.path.isdir(build_dir):
-    print(f"ERROR: build dir not found: {build_dir}")
-    sys.exit(1)
-
-for root, dirs, files in os.walk(build_dir):
-    for fname in files:
-        if fname == "Dockerfile":
-            path = os.path.join(root, fname)
-            with open(path) as f:
-                original = f.read()
-            print(f"Found: {path}")
-            print(f"  npm lines: {[l.strip() for l in original.splitlines() if 'npm install' in l]}")
-            patched_content = re.sub(
-                r'(RUN )(.*?)(npm install)',
-                r"\1sed -i '/\"quakejs-files\"/d' package.json 2>/dev/null; \2\3",
-                original
-            )
-            if patched_content != original:
-                with open(path, 'w') as f:
-                    f.write(patched_content)
-                print(f"  PATCHED OK")
-                patched += 1
-            else:
-                print(f"  skipped (already patched or no npm install found)")
-
-print(f"Total patched: {patched}")
-PYEOF
-
-if [ $? -ne 0 ]; then
-    bashio::exit.nok "Dockerfile patching failed"
-fi
+bashio::log.info "Patching Dockerfiles to remove quakejs-files..."
+find "${WORK_DIR}/build" -name "Dockerfile" | while read -r DF; do
+    bashio::log.info "Patching: ${DF}"
+    awk '{
+        if (/npm install/ && !/quakejs-files/) {
+            print "RUN sed -i \x27/\"quakejs-files\"/d\x27 package.json 2>/dev/null || true"
+        }
+        print
+    }' "${DF}" > "${DF}.patched" && mv "${DF}.patched" "${DF}"
+    bashio::log.info "Done: $(grep -c 'quakejs-files' "${DF}") quakejs-files lines now in ${DF}"
+done
 
 bashio::log.info "Pruning Docker build cache..."
 docker builder prune -af 2>/dev/null || true
