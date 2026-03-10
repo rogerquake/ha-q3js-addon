@@ -6,7 +6,8 @@ RUN apk add --no-cache \
     curl \
     git \
     docker-cli \
-    openssl
+    openssl \
+    nodejs
 
 # Install docker compose v2 plugin
 RUN mkdir -p /usr/lib/docker/cli-plugins \
