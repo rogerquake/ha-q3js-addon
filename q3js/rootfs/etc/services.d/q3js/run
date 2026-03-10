@@ -15,7 +15,6 @@ LOG_DIR="/var/log/q3js"
 GAME_LOG="${LOG_DIR}/game.log"
 
 mkdir -p "${LOG_DIR}"
-mkdir -p "${WORK_DIR}"
 
 bashio::log.info "========================================="
 bashio::log.info " Q3JS - Quake III Arena"
@@ -23,20 +22,14 @@ bashio::log.info " (unknown-gd/quakejs-dockerized-ssl)"
 bashio::log.info "========================================="
 
 # --------------------------------------------------------------------------
-# Dynamically find the real host path for /share by inspecting this
-# addon's own container mounts via the Docker socket.
-# Uses hostname (which equals container ID in Docker) as fallback.
+# Dynamically find the real host path for /share via docker inspect
 # --------------------------------------------------------------------------
 HOST_SHARE=""
 
-# Try cgroup v1 style (64-char hex ID)
 CONTAINER_ID=$(grep -o '[a-f0-9]\{64\}' /proc/self/cgroup 2>/dev/null | head -1 || true)
-
-# Fallback: on cgroup v2 (HAOS), hostname IS the short container ID
 if [ -z "${CONTAINER_ID}" ]; then
     CONTAINER_ID=$(hostname 2>/dev/null || true)
 fi
-
 bashio::log.info "Addon container ID: ${CONTAINER_ID}"
 
 if [ -n "${CONTAINER_ID}" ]; then
@@ -55,24 +48,19 @@ bashio::log.info "Host share path: ${HOST_SHARE}"
 bashio::log.info "Host work dir:   ${HOST_WORK_DIR}"
 
 # --------------------------------------------------------------------------
-# Always re-clone to ensure Dockerfiles are unpatched before we patch them
+# Wipe and re-clone every time so Dockerfiles are always fresh for patching
 # --------------------------------------------------------------------------
-if [ -d "${WORK_DIR}/.git" ]; then
-    bashio::log.info "Removing old clone for fresh start..."
-    rm -rf "${WORK_DIR}/.git" "${WORK_DIR}/build"
-fi
-bashio::log.info "Cloning quakejs-dockerized-ssl..."
-git clone --depth 1 https://github.com/unknown-gd/quakejs-dockerized-ssl.git "${WORK_DIR}" 2>&1 || true
+bashio::log.info "Wiping old clone and re-cloning fresh..."
+rm -rf "${WORK_DIR}"
+git clone --depth 1 https://github.com/unknown-gd/quakejs-dockerized-ssl.git "${WORK_DIR}"
 
 cd "${WORK_DIR}" || bashio::exit.nok "Failed to enter work dir"
 
 # --------------------------------------------------------------------------
-# Patch ALL Dockerfiles: use awk to insert a sed line before every
-# npm install step, removing quakejs-files from package.json inside
-# the build container (where the file actually lives after git clone).
+# Patch ALL Dockerfiles: insert sed before npm install to strip quakejs-files
 # --------------------------------------------------------------------------
 bashio::log.info "Patching Dockerfiles to remove quakejs-files..."
-find "${WORK_DIR}/build" -name "Dockerfile" | while read -r DF; do
+find "${WORK_DIR}/build" -name "Dockerfile" 2>/dev/null | while read -r DF; do
     bashio::log.info "Patching: ${DF}"
     awk '{
         if (/npm install/ && !/quakejs-files/) {
@@ -80,7 +68,7 @@ find "${WORK_DIR}/build" -name "Dockerfile" | while read -r DF; do
         }
         print
     }' "${DF}" > "${DF}.patched" && mv "${DF}.patched" "${DF}"
-    bashio::log.info "  quakejs-files patch lines in file: $(grep -c 'quakejs-files' "${DF}")"
+    bashio::log.info "  patch lines added: $(grep -c 'quakejs-files' "${DF}")"
 done
 
 bashio::log.info "Pruning Docker build cache..."
@@ -157,7 +145,7 @@ Q3JS_SERVER_RESTART_HOURS=${RESTART_HOURS}
 ENVEOF
 
 # --------------------------------------------------------------------------
-# Write docker-compose.override.yml using the detected real host paths
+# Write docker-compose.override.yml with real host paths for all volumes
 # --------------------------------------------------------------------------
 bashio::log.info "Writing docker-compose.override.yml..."
 cat > "${WORK_DIR}/docker-compose.override.yml" << OVERRIDE
@@ -181,7 +169,7 @@ services:
       - ${HOST_WORK_DIR}/config/certificates:/app/certificates:ro
 OVERRIDE
 
-bashio::log.info "docker-compose.override.yml written:"
+bashio::log.info "docker-compose.override.yml contents:"
 cat "${WORK_DIR}/docker-compose.override.yml"
 
 # --------------------------------------------------------------------------
