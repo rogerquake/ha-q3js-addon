@@ -50,9 +50,9 @@ bashio::log.info "Host work dir:   ${HOST_WORK_DIR}"
 # --------------------------------------------------------------------------
 # Stop any running containers BEFORE wiping the work dir
 # --------------------------------------------------------------------------
-if [ -f "${WORK_DIR}/docker-compose.yml" ]; then
+if [ -f "${WORK_DIR}/compose.yml" ]; then
     bashio::log.info "Stopping any previous containers..."
-    docker compose -f "${WORK_DIR}/docker-compose.yml" down --remove-orphans 2>/dev/null || true
+    docker compose -f "${WORK_DIR}/compose.yml" down --remove-orphans 2>/dev/null || true
 fi
 
 # --------------------------------------------------------------------------
@@ -70,22 +70,22 @@ cd "${WORK_DIR}" || bashio::exit.nok "Failed to enter work dir"
 bashio::log.info "Cloned files in ${WORK_DIR}:"
 ls -la "${WORK_DIR}/"
 
-# Find the real docker-compose.yml — it may not be at the repo root
-COMPOSE_FILE=$(find "${WORK_DIR}" -maxdepth 2 -name "docker-compose.yml" | head -1 || true)
+# Find compose.yml
+COMPOSE_FILE=$(find "${WORK_DIR}" -maxdepth 2 -name "compose.yml" | head -1 || true)
 if [ -z "${COMPOSE_FILE}" ]; then
-    bashio::log.error "docker-compose.yml not found in cloned repo!"
+    bashio::log.error "compose.yml not found in cloned repo!"
     bashio::log.info "Full tree:"
     find "${WORK_DIR}" -maxdepth 3 | head -40
-    bashio::exit.nok "docker-compose.yml missing"
+    bashio::exit.nok "compose.yml missing"
 fi
 bashio::log.info "Found compose file: ${COMPOSE_FILE}"
 
 # --------------------------------------------------------------------------
-# Patch docker-compose.yml: replace ALL "./" volume paths with absolute
-# host paths so the host Docker daemon can resolve them correctly.
+# Patch compose.yml: replace ALL "./" volume paths with absolute host paths
+# so the host Docker daemon can resolve them correctly.
 # (Without this, host Docker resolves "./" as "/share/..." which is read-only)
 # --------------------------------------------------------------------------
-bashio::log.info "Patching docker-compose.yml volume paths..."
+bashio::log.info "Patching compose.yml volume paths..."
 bashio::log.info "  Replacing './' with '${HOST_WORK_DIR}/'"
 sed -i "s|      - \./|      - ${HOST_WORK_DIR}/|g" "${COMPOSE_FILE}"
 bashio::log.info "Patched volume lines:"
@@ -180,10 +180,10 @@ Q3JS_SERVER_RESTART_HOURS=${RESTART_HOURS}
 ENVEOF
 
 # --------------------------------------------------------------------------
-# Log the final docker-compose.yml volume section for debugging
+# Log the final volume section for debugging
 # --------------------------------------------------------------------------
-bashio::log.info "Final volume mounts in docker-compose.yml:"
-grep -A1 "volumes:" "${WORK_DIR}/docker-compose.yml" | grep " - /" | head -20 || true
+bashio::log.info "Final volume mounts in compose.yml:"
+grep -A1 "volumes:" "${COMPOSE_FILE}" | grep " - /" | head -20 || true
 
 # --------------------------------------------------------------------------
 # Build and start via docker compose
