@@ -200,12 +200,15 @@ seta bot_enable 1
 CFGEOF
 
 BOT_COUNT=$(bashio::config 'bots | length')
+BOT_SKILL=$(bashio::config "bots[0].skill")
+echo "seta g_spSkill ${BOT_SKILL}" >> "${WORK_DIR}/config/dedicated-server/baseq3/server.cfg"
+echo "map ${MAP_NAME}" >> "${WORK_DIR}/config/dedicated-server/baseq3/server.cfg"
+# addbot after map in server.cfg executes post map-load
 for i in $(seq 0 $((BOT_COUNT - 1))); do
     BOT_NAME=$(bashio::config "bots[${i}].name")
     BOT_SKILL=$(bashio::config "bots[${i}].skill")
     echo "addbot ${BOT_NAME} ${BOT_SKILL}" >> "${WORK_DIR}/config/dedicated-server/baseq3/server.cfg"
 done
-echo "map ${MAP_NAME}" >> "${WORK_DIR}/config/dedicated-server/baseq3/server.cfg"
 
 cp "${WORK_DIR}/config/dedicated-server/baseq3/server.cfg" \
    "${WORK_DIR}/config/dedicated-server/cpma/server.cfg"
@@ -238,7 +241,6 @@ docker compose -f "${COMPOSE_FILE}" up -d 2>&1 | tee "${LOG_DIR}/compose.log"
 
 # --------------------------------------------------------------------------
 # Patch DirtyInstallers callback bug in dedicated server JS
-# (callback is called but not passed as parameter — crashes on manifest load)
 # --------------------------------------------------------------------------
 bashio::log.info "Waiting for dedicated server container to start..."
 for i in $(seq 1 30); do
@@ -250,10 +252,10 @@ done
 bashio::log.info "Patching DirtyInstallers callback bug in ioq3ded_secure.js..."
 docker exec q3js-dedicated-server-1 \
     sed -i 's/return callback(/return (typeof callback === "function") \&\& callback(/g' \
-    /app/build/ioq3ded_secure.js 2>/dev/null && \
-    bashio::log.info "Patch applied — restarting dedicated server..." && \
-    docker restart q3js-dedicated-server-1 2>/dev/null || \
-    bashio::log.warning "Patch failed — dedicated server may not start correctly"
+    /app/build/ioq3ded_secure.js 2>/dev/null \
+    && bashio::log.info "Patch applied — restarting dedicated server..." \
+    && docker restart q3js-dedicated-server-1 2>/dev/null \
+    || bashio::log.warning "Patch failed — dedicated server may not start correctly"
 
 bashio::log.info "Q3JS stack is up!"
 bashio::log.info "  Web client : https://${HOST_IP}:8443"
