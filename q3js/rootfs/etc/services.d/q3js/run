@@ -1,8 +1,6 @@
 #!/usr/bin/with-contenv bashio
 # ==============================================================================
-# Q3JS Add-on
-# Clones unknown-gd/quakejs-dockerized-ssl and runs it via docker compose
-# using the host Docker socket — no source builds inside this addon.
+# Q3JS Add-on — runs quakejs-dockerized-ssl via docker compose
 # ==============================================================================
 
 MAP_NAME=$(bashio::config 'map_name')
@@ -12,62 +10,112 @@ RCON_PASS=$(bashio::config 'rcon_password')
 GAMEMODE=$(bashio::config 'gamemode')
 RESTART_HOURS=$(bashio::config 'restart_hours')
 
-WORK_DIR="/data/quakejs-dockerized-ssl"
+WORK_DIR="/share/quakejs-dockerized-ssl"
+HOST_WORK_DIR="/mnt/data/supervisor/share/quakejs-dockerized-ssl"
 LOG_DIR="/var/log/q3js"
 GAME_LOG="${LOG_DIR}/game.log"
 
 mkdir -p "${LOG_DIR}"
+mkdir -p "${WORK_DIR}"
 
 bashio::log.info "========================================="
 bashio::log.info " Q3JS - Quake III Arena"
 bashio::log.info " (unknown-gd/quakejs-dockerized-ssl)"
 bashio::log.info "========================================="
 
-# ── Clone or update the repo ──────────────────────────────────────────────────
-if [ ! -d "${WORK_DIR}/.git" ]; then
-    bashio::log.info "Cloning quakejs-dockerized-ssl..."
-    git clone --depth 1 https://github.com/unknown-gd/quakejs-dockerized-ssl.git "${WORK_DIR}"
-else
-    bashio::log.info "Updating quakejs-dockerized-ssl..."
-    git -C "${WORK_DIR}" pull --ff-only
+# Always re-clone to ensure Dockerfiles are unpatched before we patch them
+if [ -d "${WORK_DIR}/.git" ]; then
+    bashio::log.info "Removing old clone for fresh start..."
+    rm -rf "${WORK_DIR}/.git" "${WORK_DIR}/build"
+fi
+bashio::log.info "Cloning quakejs-dockerized-ssl..."
+git clone --depth 1 https://github.com/unknown-gd/quakejs-dockerized-ssl.git "${WORK_DIR}" 2>&1 || true
+
+cd "${WORK_DIR}" || bashio::exit.nok "Failed to enter work dir"
+
+# --------------------------------------------------------------------------
+# Patch ALL Dockerfiles: inject sed to remove quakejs-files before npm install
+# quakejs-files was removed from npm and breaks every service build.
+# --------------------------------------------------------------------------
+bashio::log.info "Scanning for Dockerfiles to patch..."
+python3 << PYEOF
+import os, re, sys
+
+build_dir = "${WORK_DIR}/build"
+patched = 0
+
+if not os.path.isdir(build_dir):
+    print(f"ERROR: build dir not found: {build_dir}")
+    sys.exit(1)
+
+for root, dirs, files in os.walk(build_dir):
+    for fname in files:
+        if fname == "Dockerfile":
+            path = os.path.join(root, fname)
+            with open(path) as f:
+                original = f.read()
+            print(f"Found: {path}")
+            print(f"  npm lines: {[l.strip() for l in original.splitlines() if 'npm install' in l]}")
+            patched_content = re.sub(
+                r'(RUN )(.*?)(npm install)',
+                r"\1sed -i '/\"quakejs-files\"/d' package.json 2>/dev/null; \2\3",
+                original
+            )
+            if patched_content != original:
+                with open(path, 'w') as f:
+                    f.write(patched_content)
+                print(f"  PATCHED OK")
+                patched += 1
+            else:
+                print(f"  skipped (already patched or no npm install found)")
+
+print(f"Total patched: {patched}")
+PYEOF
+
+if [ $? -ne 0 ]; then
+    bashio::exit.nok "Dockerfile patching failed"
 fi
 
-cd "${WORK_DIR}"
+bashio::log.info "Pruning Docker build cache..."
+docker builder prune -af 2>/dev/null || true
 
-# ── Generate self-signed certificate ─────────────────────────────────────────
+# --------------------------------------------------------------------------
+# Generate self-signed certificate
+# --------------------------------------------------------------------------
 CERT_DIR="${WORK_DIR}/config/certificates"
 mkdir -p "${CERT_DIR}"
-CERT_FILE="${CERT_DIR}/q3js.crt"
-KEY_FILE="${CERT_DIR}/q3js.key"
 
-if [ ! -f "${CERT_FILE}" ]; then
+if [ ! -f "${CERT_DIR}/q3js.crt" ]; then
     bashio::log.info "Generating self-signed certificate..."
     openssl req -x509 -nodes -days 3650 -newkey rsa:2048 \
-        -keyout "${KEY_FILE}" \
-        -out "${CERT_FILE}" \
+        -keyout "${CERT_DIR}/q3js.key" \
+        -out "${CERT_DIR}/q3js.crt" \
         -subj "/CN=homeassistant.local" 2>/dev/null
 fi
 
-# Write certificates/config.json (required by all services)
-cat > "${CERT_DIR}/config.json" << EOF
+cat > "${CERT_DIR}/config.json" << CERTEOF
 {
     "cert": "/app/certificates/q3js.crt",
     "key": "/app/certificates/q3js.key"
 }
-EOF
+CERTEOF
 
-# ── Copy pak assets from /share if present ────────────────────────────────────
+# --------------------------------------------------------------------------
+# Copy pak assets from /share/q3js/assets if present
+# --------------------------------------------------------------------------
 mkdir -p "${WORK_DIR}/assets"
-if bashio::fs.directory_exists "/share/q3js/assets"; then
+if [ -d "/share/q3js/assets" ]; then
     bashio::log.info "Copying assets from /share/q3js/assets..."
-    cp -r /share/q3js/assets/. "${WORK_DIR}/assets/" 2>/dev/null || true
+    cp -rn /share/q3js/assets/. "${WORK_DIR}/assets/" 2>/dev/null || true
 fi
 
-# ── Write server.cfg ──────────────────────────────────────────────────────────
+# --------------------------------------------------------------------------
+# Write server.cfg
+# --------------------------------------------------------------------------
 mkdir -p "${WORK_DIR}/config/dedicated-server/baseq3"
 mkdir -p "${WORK_DIR}/config/dedicated-server/cpma"
 
-cat > "${WORK_DIR}/config/dedicated-server/baseq3/server.cfg" << EOF
+cat > "${WORK_DIR}/config/dedicated-server/baseq3/server.cfg" << CFGEOF
 seta sv_hostname "HA QuakeJS Server"
 seta sv_maxclients 12
 seta g_motd "Home Assistant Quake 3"
@@ -78,58 +126,85 @@ seta rconpassword "${RCON_PASS}"
 seta g_log "${GAME_LOG}"
 seta g_logSync 1
 seta bot_enable 1
-EOF
+CFGEOF
 
-# Append bot commands
 BOT_COUNT=$(bashio::config 'bots | length')
 for i in $(seq 0 $((BOT_COUNT - 1))); do
     BOT_NAME=$(bashio::config "bots[${i}].name")
     BOT_SKILL=$(bashio::config "bots[${i}].skill")
     echo "addbot ${BOT_NAME} ${BOT_SKILL}" >> "${WORK_DIR}/config/dedicated-server/baseq3/server.cfg"
-    bashio::log.info "Bot: ${BOT_NAME} (skill ${BOT_SKILL})"
 done
 echo "map ${MAP_NAME}" >> "${WORK_DIR}/config/dedicated-server/baseq3/server.cfg"
 
-# Copy cpma config placeholder if missing
-if [ ! -f "${WORK_DIR}/config/dedicated-server/cpma/server.cfg" ]; then
-    cp "${WORK_DIR}/config/dedicated-server/baseq3/server.cfg" \
-       "${WORK_DIR}/config/dedicated-server/cpma/server.cfg"
-fi
+cp "${WORK_DIR}/config/dedicated-server/baseq3/server.cfg" \
+   "${WORK_DIR}/config/dedicated-server/cpma/server.cfg"
 
-# ── Write .env ────────────────────────────────────────────────────────────────
-cat > "${WORK_DIR}/.env" << EOF
+# --------------------------------------------------------------------------
+# Write .env
+# --------------------------------------------------------------------------
+cat > "${WORK_DIR}/.env" << ENVEOF
 Q3JS_DOMAIN=homeassistant.local
 Q3JS_SERVER_GAMEMODE=${GAMEMODE}
 Q3JS_SERVER_DEDICATED=1
 Q3JS_SERVER_RESTART_HOURS=${RESTART_HOURS}
-EOF
+ENVEOF
 
-# ── Tear down any previous run ────────────────────────────────────────────────
+# --------------------------------------------------------------------------
+# Write docker-compose.override.yml with real host paths for all volumes
+# --------------------------------------------------------------------------
+bashio::log.info "Writing docker-compose.override.yml..."
+cat > "${WORK_DIR}/docker-compose.override.yml" << OVERRIDE
+services:
+  q3js-master-server:
+    volumes:
+      - ${HOST_WORK_DIR}/config/certificates:/app/certificates:ro
+  q3js-content-server:
+    volumes:
+      - ${HOST_WORK_DIR}/assets:/app/assets:rw
+      - ${HOST_WORK_DIR}/config/certificates:/app/certificates:ro
+  q3js-web-client:
+    volumes:
+      - ${HOST_WORK_DIR}/config/certificates:/app/certificates:ro
+  q3js-dedicated-server-1:
+    volumes:
+      - ${HOST_WORK_DIR}/config/dedicated-server/baseq3/server.cfg:/app/base/baseq3/server.cfg
+      - ${HOST_WORK_DIR}/config/dedicated-server/cpma/server.cfg:/app/base/cpma/server.cfg
+  q3js-ds-wss-proxy-1:
+    volumes:
+      - ${HOST_WORK_DIR}/config/certificates:/app/certificates:ro
+OVERRIDE
+
+# --------------------------------------------------------------------------
+# Build and start via docker compose
+# --------------------------------------------------------------------------
 bashio::log.info "Stopping any previous containers..."
 docker compose down --remove-orphans 2>/dev/null || true
 
-# ── Build and start all services ──────────────────────────────────────────────
-bashio::log.info "Building and starting all Q3JS services via docker compose..."
+bashio::log.info "Building Q3JS containers (first run takes several minutes)..."
 docker compose build 2>&1 | tee "${LOG_DIR}/build.log"
+if [ $? -ne 0 ]; then
+    bashio::log.error "Build failed! Check /var/log/q3js/build.log"
+    bashio::exit.nok "Build failed"
+fi
+
+bashio::log.info "Starting Q3JS containers..."
 docker compose up -d 2>&1 | tee "${LOG_DIR}/compose.log"
 
-bashio::log.info "Q3JS stack is up."
+bashio::log.info "Q3JS stack is up!"
 bashio::log.info "  Web client : https://homeassistant.local:443"
 bashio::log.info "  WSS proxy  : wss://homeassistant.local:27961"
 bashio::log.info "  Content    : https://homeassistant.local:9000"
-bashio::log.info "  Metrics    : http://homeassistant.local:8090/api/metrics"
 
-# ── Start metrics server (reads game log from dedicated container) ─────────────
+# --------------------------------------------------------------------------
+# Start metrics server
+# --------------------------------------------------------------------------
 bashio::log.info "Starting metrics server on :8090..."
 Q3_LOG_FILE="${GAME_LOG}" \
 METRICS_PORT=8090 \
 RCON_PASS="${RCON_PASS}" \
-    /usr/bin/q3js-metrics > >(tee "${LOG_DIR}/metrics.log") 2>&1 &
+    /usr/bin/q3js-metrics > "${LOG_DIR}/metrics.log" 2>&1 &
 
-# ── Keep addon alive — tail compose logs ─────────────────────────────────────
-bashio::log.info "Tailing compose logs (addon will restart containers if they stop)..."
+# Keep alive
 while true; do
-    docker compose ps --format json 2>/dev/null | grep -q '"State":"running"' || \
-        bashio::log.warning "One or more Q3JS containers not running — check logs."
     sleep 30
 done
