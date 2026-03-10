@@ -90,27 +90,45 @@ bashio::log.info "Patching compose.yml volume paths..."
 sed -i "s|      - \./|      - ${HOST_WORK_DIR}/|g" "${COMPOSE_FILE}"
 grep -n " - ${HOST_SHARE}" "${COMPOSE_FILE}" | head -20 || true
 
-# Add game log volume mount to dedicated server so metrics server can read it
+# --------------------------------------------------------------------------
+# Add game log volume mount to dedicated server
+# --------------------------------------------------------------------------
 touch "${WORK_DIR}/game.log"
 bashio::log.info "Patching dedicated server game log volume..."
 sed -i "/dedicated-server.*server\.cfg:\/app\/base\/cpma\/server\.cfg/{
     a\      - ${HOST_WORK_DIR}/game.log:/app/game.log
 }" "${COMPOSE_FILE}"
-grep -A5 "q3js-dedicated-server" "${COMPOSE_FILE}" | grep " - " || true
 
-# Patch dedicated server to allow self-signed certs (NODE_TLS_REJECT_UNAUTHORIZED)
-bashio::log.info "Patching dedicated server NODE_TLS_REJECT_UNAUTHORIZED..."
+# --------------------------------------------------------------------------
+# Mount pak files directly into dedicated server (bypasses DirtyInstallers bug)
+# --------------------------------------------------------------------------
+bashio::log.info "Mounting pak files into dedicated server..."
+for PAKFILE in /share/q3js/assets/baseq3/*.pk3; do
+    [ -f "${PAKFILE}" ] || continue
+    PAKNAME=$(basename "${PAKFILE}")
+    sed -i "/dedicated-server.*game\.log:\/app\/game\.log/{
+        a\      - ${HOST_SHARE}/q3js/assets/baseq3/${PAKNAME}:/app/base/baseq3/${PAKNAME}:ro
+    }" "${COMPOSE_FILE}"
+    bashio::log.info "  mounted: ${PAKNAME}"
+done
+bashio::log.info "Dedicated server pak mounts:"
+grep -A30 "q3js-dedicated-server" "${COMPOSE_FILE}" | grep "pk3" || true
+
+# --------------------------------------------------------------------------
+# Patch dedicated server: allow self-signed certs
+# --------------------------------------------------------------------------
+bashio::log.info "Patching NODE_TLS_REJECT_UNAUTHORIZED..."
 sed -i '/q3js-dedicated-server-1:/{:loop;n;/volumes:/!b loop;i\    environment:\n      - NODE_TLS_REJECT_UNAUTHORIZED=0
 }' "${COMPOSE_FILE}"
-bashio::log.info "Dedicated server environment:"
-grep -A3 "environment" "${COMPOSE_FILE}" | head -10 || true
 
-# Remap port 443 -> 8443 (443 is taken by Nginx Proxy Manager)
-bashio::log.info "Remapping port 443 -> 8443 in compose.yml..."
+# --------------------------------------------------------------------------
+# Remap port 443 -> 8443 (443 taken by Nginx Proxy Manager)
+# --------------------------------------------------------------------------
+bashio::log.info "Remapping port 443 -> 8443..."
 sed -i 's|"443:443"|"8443:443"|g; s|- 443:443|- 8443:443|g' "${COMPOSE_FILE}"
 
 # --------------------------------------------------------------------------
-# Patch ALL Dockerfiles: insert sed before npm install to strip quakejs-files
+# Patch ALL Dockerfiles: strip quakejs-files from npm install
 # --------------------------------------------------------------------------
 bashio::log.info "Patching Dockerfiles to remove quakejs-files..."
 find "${WORK_DIR}/build" -name "Dockerfile" 2>/dev/null | while read -r DF; do
@@ -148,9 +166,8 @@ cat > "${CERT_DIR}/config.json" << CERTEOF
 }
 CERTEOF
 
-
 # --------------------------------------------------------------------------
-# Copy pak assets from /share/q3js/assets into work dir
+# Copy pak assets into content server assets folder
 # --------------------------------------------------------------------------
 mkdir -p "${WORK_DIR}/assets/baseq3"
 if [ -d "/share/q3js/assets/baseq3" ]; then
@@ -158,11 +175,9 @@ if [ -d "/share/q3js/assets/baseq3" ]; then
     cp -v /share/q3js/assets/baseq3/*.pk3 "${WORK_DIR}/assets/baseq3/" 2>&1 | while IFS= read -r line; do
         bashio::log.info "  ${line}"
     done
-    bashio::log.info "Assets in ${WORK_DIR}/assets/baseq3:"
     ls -lh "${WORK_DIR}/assets/baseq3/" || true
 else
     bashio::log.warning "No pak files found at /share/q3js/assets/baseq3/ — game will not load!"
-    bashio::log.warning "Copy pak0.pk3 - pak8.pk3 from your Q3A install to /share/q3js/assets/baseq3/"
 fi
 
 # --------------------------------------------------------------------------
@@ -205,11 +220,8 @@ Q3JS_SERVER_DEDICATED=1
 Q3JS_SERVER_RESTART_HOURS=${RESTART_HOURS}
 ENVEOF
 
-# --------------------------------------------------------------------------
-# Log the final volume section for debugging
-# --------------------------------------------------------------------------
 bashio::log.info "Final volume mounts in compose.yml:"
-grep -A1 "volumes:" "${COMPOSE_FILE}" | grep " - /" | head -20 || true
+grep -A1 "volumes:" "${COMPOSE_FILE}" | grep " - /" | head -30 || true
 
 # --------------------------------------------------------------------------
 # Build and start via docker compose
