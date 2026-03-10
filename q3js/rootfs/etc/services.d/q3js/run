@@ -48,6 +48,14 @@ bashio::log.info "Host share path: ${HOST_SHARE}"
 bashio::log.info "Host work dir:   ${HOST_WORK_DIR}"
 
 # --------------------------------------------------------------------------
+# Stop any running containers BEFORE wiping the work dir
+# --------------------------------------------------------------------------
+if [ -f "${WORK_DIR}/docker-compose.yml" ]; then
+    bashio::log.info "Stopping any previous containers..."
+    docker compose -f "${WORK_DIR}/docker-compose.yml" down --remove-orphans 2>/dev/null || true
+fi
+
+# --------------------------------------------------------------------------
 # Wipe and re-clone every time so Dockerfiles are always fresh for patching
 # --------------------------------------------------------------------------
 bashio::log.info "Wiping old clone and re-cloning fresh..."
@@ -55,6 +63,18 @@ rm -rf "${WORK_DIR}"
 git clone --depth 1 https://github.com/unknown-gd/quakejs-dockerized-ssl.git "${WORK_DIR}"
 
 cd "${WORK_DIR}" || bashio::exit.nok "Failed to enter work dir"
+
+# --------------------------------------------------------------------------
+# Patch docker-compose.yml: replace ALL "./" volume paths with absolute
+# host paths so the host Docker daemon can resolve them correctly.
+# (Without this, host Docker resolves "./" as "/share/..." which is read-only)
+# --------------------------------------------------------------------------
+bashio::log.info "Patching docker-compose.yml volume paths..."
+bashio::log.info "  Replacing './' with '${HOST_WORK_DIR}/'"
+sed -i "s|      - \./|      - ${HOST_WORK_DIR}/|g" "${WORK_DIR}/docker-compose.yml"
+bashio::log.info "Patched volume lines:"
+grep -n "HOST_WORK_DIR\|${HOST_WORK_DIR}" "${WORK_DIR}/docker-compose.yml" || \
+    grep -n " - ${HOST_SHARE}" "${WORK_DIR}/docker-compose.yml" || true
 
 # --------------------------------------------------------------------------
 # Patch ALL Dockerfiles: insert sed before npm install to strip quakejs-files
@@ -145,39 +165,14 @@ Q3JS_SERVER_RESTART_HOURS=${RESTART_HOURS}
 ENVEOF
 
 # --------------------------------------------------------------------------
-# Write docker-compose.override.yml with real host paths for all volumes
+# Log the final docker-compose.yml volume section for debugging
 # --------------------------------------------------------------------------
-bashio::log.info "Writing docker-compose.override.yml..."
-cat > "${WORK_DIR}/docker-compose.override.yml" << OVERRIDE
-services:
-  q3js-master-server:
-    volumes:
-      - ${HOST_WORK_DIR}/config/certificates:/app/certificates:ro
-  q3js-content-server:
-    volumes:
-      - ${HOST_WORK_DIR}/assets:/app/assets:rw
-      - ${HOST_WORK_DIR}/config/certificates:/app/certificates:ro
-  q3js-web-client:
-    volumes:
-      - ${HOST_WORK_DIR}/config/certificates:/app/certificates:ro
-  q3js-dedicated-server-1:
-    volumes:
-      - ${HOST_WORK_DIR}/config/dedicated-server/baseq3/server.cfg:/app/base/baseq3/server.cfg
-      - ${HOST_WORK_DIR}/config/dedicated-server/cpma/server.cfg:/app/base/cpma/server.cfg
-  q3js-ds-wss-proxy-1:
-    volumes:
-      - ${HOST_WORK_DIR}/config/certificates:/app/certificates:ro
-OVERRIDE
-
-bashio::log.info "docker-compose.override.yml contents:"
-cat "${WORK_DIR}/docker-compose.override.yml"
+bashio::log.info "Final volume mounts in docker-compose.yml:"
+grep -A1 "volumes:" "${WORK_DIR}/docker-compose.yml" | grep " - /" | head -20 || true
 
 # --------------------------------------------------------------------------
 # Build and start via docker compose
 # --------------------------------------------------------------------------
-bashio::log.info "Stopping any previous containers..."
-docker compose down --remove-orphans 2>/dev/null || true
-
 bashio::log.info "Building Q3JS containers (first run takes several minutes)..."
 docker compose build 2>&1 | tee "${LOG_DIR}/build.log"
 if [ $? -ne 0 ]; then
