@@ -98,6 +98,13 @@ sed -i "/dedicated-server.*server\.cfg:\/app\/base\/cpma\/server\.cfg/{
 }" "${COMPOSE_FILE}"
 grep -A5 "q3js-dedicated-server" "${COMPOSE_FILE}" | grep " - " || true
 
+# Patch dedicated server to allow self-signed certs (NODE_TLS_REJECT_UNAUTHORIZED)
+bashio::log.info "Patching dedicated server NODE_TLS_REJECT_UNAUTHORIZED..."
+sed -i '/q3js-dedicated-server-1:/{:loop;n;/volumes:/!b loop;i\    environment:\n      - NODE_TLS_REJECT_UNAUTHORIZED=0
+}' "${COMPOSE_FILE}"
+bashio::log.info "Dedicated server environment:"
+grep -A3 "environment" "${COMPOSE_FILE}" | head -10 || true
+
 # Remap port 443 -> 8443 (443 is taken by Nginx Proxy Manager)
 bashio::log.info "Remapping port 443 -> 8443 in compose.yml..."
 sed -i 's|"443:443"|"8443:443"|g; s|- 443:443|- 8443:443|g' "${COMPOSE_FILE}"
