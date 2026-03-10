@@ -60,9 +60,25 @@ fi
 # --------------------------------------------------------------------------
 bashio::log.info "Wiping old clone and re-cloning fresh..."
 rm -rf "${WORK_DIR}"
-git clone --depth 1 https://github.com/unknown-gd/quakejs-dockerized-ssl.git "${WORK_DIR}"
+if ! git clone --depth 1 https://github.com/unknown-gd/quakejs-dockerized-ssl.git "${WORK_DIR}"; then
+    bashio::exit.nok "git clone failed"
+fi
 
 cd "${WORK_DIR}" || bashio::exit.nok "Failed to enter work dir"
+
+# Log what actually cloned so we can see the real file layout
+bashio::log.info "Cloned files in ${WORK_DIR}:"
+ls -la "${WORK_DIR}/"
+
+# Find the real docker-compose.yml — it may not be at the repo root
+COMPOSE_FILE=$(find "${WORK_DIR}" -maxdepth 2 -name "docker-compose.yml" | head -1 || true)
+if [ -z "${COMPOSE_FILE}" ]; then
+    bashio::log.error "docker-compose.yml not found in cloned repo!"
+    bashio::log.info "Full tree:"
+    find "${WORK_DIR}" -maxdepth 3 | head -40
+    bashio::exit.nok "docker-compose.yml missing"
+fi
+bashio::log.info "Found compose file: ${COMPOSE_FILE}"
 
 # --------------------------------------------------------------------------
 # Patch docker-compose.yml: replace ALL "./" volume paths with absolute
@@ -71,10 +87,9 @@ cd "${WORK_DIR}" || bashio::exit.nok "Failed to enter work dir"
 # --------------------------------------------------------------------------
 bashio::log.info "Patching docker-compose.yml volume paths..."
 bashio::log.info "  Replacing './' with '${HOST_WORK_DIR}/'"
-sed -i "s|      - \./|      - ${HOST_WORK_DIR}/|g" "${WORK_DIR}/docker-compose.yml"
+sed -i "s|      - \./|      - ${HOST_WORK_DIR}/|g" "${COMPOSE_FILE}"
 bashio::log.info "Patched volume lines:"
-grep -n "HOST_WORK_DIR\|${HOST_WORK_DIR}" "${WORK_DIR}/docker-compose.yml" || \
-    grep -n " - ${HOST_SHARE}" "${WORK_DIR}/docker-compose.yml" || true
+grep -n " - ${HOST_SHARE}" "${COMPOSE_FILE}" | head -20 || true
 
 # --------------------------------------------------------------------------
 # Patch ALL Dockerfiles: insert sed before npm install to strip quakejs-files
@@ -174,14 +189,14 @@ grep -A1 "volumes:" "${WORK_DIR}/docker-compose.yml" | grep " - /" | head -20 ||
 # Build and start via docker compose
 # --------------------------------------------------------------------------
 bashio::log.info "Building Q3JS containers (first run takes several minutes)..."
-docker compose build 2>&1 | tee "${LOG_DIR}/build.log"
+docker compose -f "${COMPOSE_FILE}" build 2>&1 | tee "${LOG_DIR}/build.log"
 if [ $? -ne 0 ]; then
     bashio::log.error "Build failed! Check /var/log/q3js/build.log"
     bashio::exit.nok "Build failed"
 fi
 
 bashio::log.info "Starting Q3JS containers..."
-docker compose up -d 2>&1 | tee "${LOG_DIR}/compose.log"
+docker compose -f "${COMPOSE_FILE}" up -d 2>&1 | tee "${LOG_DIR}/compose.log"
 
 bashio::log.info "Q3JS stack is up!"
 bashio::log.info "  Web client : https://homeassistant.local:443"
