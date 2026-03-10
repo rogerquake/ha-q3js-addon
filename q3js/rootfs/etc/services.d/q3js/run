@@ -91,6 +91,12 @@ sed -i "s|      - \./|      - ${HOST_WORK_DIR}/|g" "${COMPOSE_FILE}"
 bashio::log.info "Patched volume lines:"
 grep -n " - ${HOST_SHARE}" "${COMPOSE_FILE}" | head -20 || true
 
+# Remap port 443 -> 8443 (443 is taken by Nginx Proxy Manager)
+bashio::log.info "Remapping port 443 -> 8443 in compose.yml..."
+sed -i 's|"443:443"|"8443:443"|g; s|- 443:443|- 8443:443|g' "${COMPOSE_FILE}"
+bashio::log.info "Port mappings after patch:"
+grep -n "443" "${COMPOSE_FILE}" || true
+
 # --------------------------------------------------------------------------
 # Patch ALL Dockerfiles: insert sed before npm install to strip quakejs-files
 # --------------------------------------------------------------------------
@@ -199,7 +205,7 @@ bashio::log.info "Starting Q3JS containers..."
 docker compose -f "${COMPOSE_FILE}" up -d 2>&1 | tee "${LOG_DIR}/compose.log"
 
 bashio::log.info "Q3JS stack is up!"
-bashio::log.info "  Web client : https://homeassistant.local:443"
+bashio::log.info "  Web client : https://homeassistant.local:8443"
 bashio::log.info "  WSS proxy  : wss://homeassistant.local:27961"
 bashio::log.info "  Content    : https://homeassistant.local:9000"
 
