@@ -48,25 +48,10 @@ bashio::log.info "Host share path: ${HOST_SHARE}"
 bashio::log.info "Host work dir:   ${HOST_WORK_DIR}"
 
 # --------------------------------------------------------------------------
-# Detect host LAN IP via Supervisor API (avoids Docker network IPs)
+# Host LAN IP (hardcoded)
 # --------------------------------------------------------------------------
-HOST_IP=$(curl -sf \
-    -H "Authorization: Bearer ${SUPERVISOR_TOKEN}" \
-    http://supervisor/network/interface/default/info \
-    | python3 -c "
-import json,sys
-d=json.load(sys.stdin)
-addrs=d.get('data',{}).get('ipv4',{}).get('address',[])
-if addrs: print(addrs[0].split('/')[0])
-" 2>/dev/null || true)
-if [ -z "${HOST_IP}" ]; then
-    bashio::log.warning "Supervisor API IP detection failed, trying ip route..."
-    HOST_IP=$(ip route get 8.8.8.8 2>/dev/null | awk '/via/{for(i=1;i<=NF;i++) if ($i=="src") print $(i+1)}' | head -1 || true)
-fi
-if [ -z "${HOST_IP}" ]; then
-    HOST_IP="homeassistant.local"
-fi
-bashio::log.info "Detected host LAN IP: ${HOST_IP}"
+HOST_IP="192.168.4.214"
+bashio::log.info "Host LAN IP: ${HOST_IP}"
 
 # --------------------------------------------------------------------------
 # Stop any running containers BEFORE wiping the work dir
@@ -87,15 +72,12 @@ fi
 
 cd "${WORK_DIR}" || bashio::exit.nok "Failed to enter work dir"
 
-# Log what actually cloned so we can see the real file layout
 bashio::log.info "Cloned files in ${WORK_DIR}:"
 ls -la "${WORK_DIR}/"
 
-# Find compose.yml
 COMPOSE_FILE=$(find "${WORK_DIR}" -maxdepth 2 -name "compose.yml" | head -1 || true)
 if [ -z "${COMPOSE_FILE}" ]; then
     bashio::log.error "compose.yml not found in cloned repo!"
-    bashio::log.info "Full tree:"
     find "${WORK_DIR}" -maxdepth 3 | head -40
     bashio::exit.nok "compose.yml missing"
 fi
@@ -105,9 +87,7 @@ bashio::log.info "Found compose file: ${COMPOSE_FILE}"
 # Patch compose.yml: replace ALL "./" volume paths with absolute host paths
 # --------------------------------------------------------------------------
 bashio::log.info "Patching compose.yml volume paths..."
-bashio::log.info "  Replacing './' with '${HOST_WORK_DIR}/'"
 sed -i "s|      - \./|      - ${HOST_WORK_DIR}/|g" "${COMPOSE_FILE}"
-bashio::log.info "Patched volume lines:"
 grep -n " - ${HOST_SHARE}" "${COMPOSE_FILE}" | head -20 || true
 
 # Add game log volume mount to dedicated server so metrics server can read it
@@ -116,14 +96,11 @@ bashio::log.info "Patching dedicated server game log volume..."
 sed -i "/dedicated-server.*server\.cfg:\/app\/base\/cpma\/server\.cfg/{
     a\      - ${HOST_WORK_DIR}/game.log:/app/game.log
 }" "${COMPOSE_FILE}"
-bashio::log.info "Dedicated server volumes:"
 grep -A5 "q3js-dedicated-server" "${COMPOSE_FILE}" | grep " - " || true
 
 # Remap port 443 -> 8443 (443 is taken by Nginx Proxy Manager)
 bashio::log.info "Remapping port 443 -> 8443 in compose.yml..."
 sed -i 's|"443:443"|"8443:443"|g; s|- 443:443|- 8443:443|g' "${COMPOSE_FILE}"
-bashio::log.info "Port mappings after patch:"
-grep -n "443" "${COMPOSE_FILE}" || true
 
 # --------------------------------------------------------------------------
 # Patch ALL Dockerfiles: insert sed before npm install to strip quakejs-files
@@ -245,6 +222,22 @@ Q3_LOG_FILE="${WORK_DIR}/game.log" \
 METRICS_PORT=8090 \
 RCON_PASS="${RCON_PASS}" \
     /usr/bin/q3js-metrics > "${LOG_DIR}/metrics.log" 2>&1 &
+
+# --------------------------------------------------------------------------
+# Tail dedicated server logs into addon log for debugging
+# --------------------------------------------------------------------------
+bashio::log.info "Tailing dedicated server logs..."
+(
+    for i in $(seq 1 30); do
+        if docker inspect -f "{{.State.Running}}" q3js-dedicated-server-1 2>/dev/null | grep -q true; then
+            break
+        fi
+        sleep 2
+    done
+    docker logs -f q3js-dedicated-server-1 2>&1 | while IFS= read -r line; do
+        bashio::log.info "[q3ds] ${line}"
+    done
+) &
 
 # Keep alive
 while true; do
