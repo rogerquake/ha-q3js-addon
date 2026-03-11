@@ -140,7 +140,8 @@ find "${WORK_DIR}/build" -name "Dockerfile" 2>/dev/null | while read -r DF; do
         print
     }' "${DF}" > "${DF}.patched" && mv "${DF}.patched" "${DF}"
     # Patch DirtyInstallers callback bug at build time — survives all restarts
-    echo 'RUN if [ -f /app/build/ioquake3_secure.js ]; then sed -i '"'"'s/return callback(/return (typeof callback === "function") \&\& callback(/g'"'"' /app/build/ioquake3_secure.js; fi' >> "${DF}"
+    # Covers both web client (ioquake3_secure.js) and dedicated server (ioq3ded_secure.js)
+    echo 'RUN for F in /app/build/ioquake3_secure.js /app/build/ioq3ded_secure.js; do [ -f "$F" ] && sed -i '"'"'s/return callback(/return (typeof callback === "function") \&\& callback(/g'"'"' "$F"; done' >> "${DF}"
     bashio::log.info "  quakejs-files patches: $(grep -c 'quakejs-files' "${DF}")"
     bashio::log.info "  DirtyInstallers patch added"
 done
