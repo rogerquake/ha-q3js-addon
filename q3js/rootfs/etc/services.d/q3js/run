@@ -50,7 +50,7 @@ bashio::log.info "Host work dir:   ${HOST_WORK_DIR}"
 # --------------------------------------------------------------------------
 # Host LAN IP (hardcoded)
 # --------------------------------------------------------------------------
-HOST_IP="homeassistant-test.roger.lan"
+HOST_IP="192.168.4.214"
 bashio::log.info "Host LAN IP: ${HOST_IP}"
 
 # --------------------------------------------------------------------------
@@ -146,7 +146,7 @@ bashio::log.info "Pruning Docker build cache..."
 docker builder prune -af 2>/dev/null || true
 
 # --------------------------------------------------------------------------
-# Generate self-signed certificate
+# Copy wildcard certificate from /share/q3js
 # --------------------------------------------------------------------------
 CERT_DIR="${WORK_DIR}/config/certificates"
 mkdir -p "${CERT_DIR}"
@@ -244,23 +244,37 @@ bashio::log.info "Starting Q3JS containers..."
 docker compose -f "${COMPOSE_FILE}" up -d 2>&1 | tee "${LOG_DIR}/compose.log"
 
 # --------------------------------------------------------------------------
-# Patch DirtyInstallers callback bug in dedicated server JS
-# (callback is called but not passed as parameter — crashes on manifest load)
+# Patch DirtyInstallers callback bug in dedicated server and web client JS
 # --------------------------------------------------------------------------
-bashio::log.info "Waiting for dedicated server container to start..."
+bashio::log.info "Waiting for containers to start..."
 for i in $(seq 1 30); do
     if docker inspect -f "{{.State.Running}}" q3js-dedicated-server-1 2>/dev/null | grep -q true; then
         break
     fi
     sleep 2
 done
-bashio::log.info "Patching DirtyInstallers callback bug in ioq3ded_secure.js..."
+
+bashio::log.info "Patching DirtyInstallers in dedicated server..."
 docker exec q3js-dedicated-server-1 \
     sed -i 's/return callback(/return (typeof callback === "function") \&\& callback(/g' \
     /app/build/ioq3ded_secure.js 2>/dev/null \
-    && bashio::log.info "Patch applied — restarting dedicated server..." \
+    && bashio::log.info "Dedicated server patch applied." \
     && docker restart q3js-dedicated-server-1 2>/dev/null \
-    || bashio::log.warning "Patch failed — dedicated server may not start correctly"
+    || bashio::log.warning "Dedicated server patch failed"
+
+bashio::log.info "Patching DirtyInstallers in web client JS..."
+Q3JS_CLIENT_JS=$(docker exec q3js-content-server-1 \
+    find /app -name "__ioquake3_secure.js" 2>/dev/null | head -1 || true)
+if [ -n "${Q3JS_CLIENT_JS}" ]; then
+    bashio::log.info "Found client JS: ${Q3JS_CLIENT_JS}"
+    docker exec q3js-content-server-1 \
+        sed -i 's/return callback(/return (typeof callback === "function") \&\& callback(/g' \
+        "${Q3JS_CLIENT_JS}" 2>/dev/null \
+        && bashio::log.info "Web client patch applied." \
+        || bashio::log.warning "Web client patch failed"
+else
+    bashio::log.warning "Could not find __ioquake3_secure.js in content server container"
+fi
 
 bashio::log.info "Q3JS stack is up!"
 bashio::log.info "  Web client : https://${HOST_IP}:8443"
