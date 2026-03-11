@@ -128,7 +128,7 @@ bashio::log.info "Remapping port 443 -> 8443..."
 sed -i 's|"443:443"|"8443:443"|g; s|- 443:443|- 8443:443|g' "${COMPOSE_FILE}"
 
 # --------------------------------------------------------------------------
-# Patch ALL Dockerfiles: strip quakejs-files from npm install
+# Patch ALL Dockerfiles: strip quakejs-files and fix DirtyInstallers
 # --------------------------------------------------------------------------
 bashio::log.info "Patching Dockerfiles to remove quakejs-files..."
 find "${WORK_DIR}/build" -name "Dockerfile" 2>/dev/null | while read -r DF; do
@@ -139,7 +139,10 @@ find "${WORK_DIR}/build" -name "Dockerfile" 2>/dev/null | while read -r DF; do
         }
         print
     }' "${DF}" > "${DF}.patched" && mv "${DF}.patched" "${DF}"
-    bashio::log.info "  patch lines added: $(grep -c 'quakejs-files' "${DF}")"
+    # Patch DirtyInstallers callback bug at build time — survives all restarts
+    echo 'RUN if [ -f /app/build/ioquake3_secure.js ]; then sed -i '"'"'s/return callback(/return (typeof callback === "function") \&\& callback(/g'"'"' /app/build/ioquake3_secure.js; fi' >> "${DF}"
+    bashio::log.info "  quakejs-files patches: $(grep -c 'quakejs-files' "${DF}")"
+    bashio::log.info "  DirtyInstallers patch added"
 done
 
 bashio::log.info "Pruning Docker build cache..."
@@ -242,39 +245,6 @@ fi
 
 bashio::log.info "Starting Q3JS containers..."
 docker compose -f "${COMPOSE_FILE}" up -d 2>&1 | tee "${LOG_DIR}/compose.log"
-
-# --------------------------------------------------------------------------
-# Patch DirtyInstallers callback bug in dedicated server and web client JS
-# --------------------------------------------------------------------------
-bashio::log.info "Waiting for containers to start..."
-for i in $(seq 1 30); do
-    if docker inspect -f "{{.State.Running}}" q3js-dedicated-server-1 2>/dev/null | grep -q true; then
-        break
-    fi
-    sleep 2
-done
-
-bashio::log.info "Patching DirtyInstallers in dedicated server..."
-docker exec q3js-dedicated-server-1 \
-    sed -i 's/return callback(/return (typeof callback === "function") \&\& callback(/g' \
-    /app/build/ioq3ded_secure.js 2>/dev/null \
-    && bashio::log.info "Dedicated server patch applied." \
-    && docker restart q3js-dedicated-server-1 2>/dev/null \
-    || bashio::log.warning "Dedicated server patch failed"
-
-bashio::log.info "Patching DirtyInstallers in web client JS..."
-Q3JS_CLIENT_JS=$(docker exec q3js-content-server-1 \
-    find /app -name "__ioquake3_secure.js" 2>/dev/null | head -1 || true)
-if [ -n "${Q3JS_CLIENT_JS}" ]; then
-    bashio::log.info "Found client JS: ${Q3JS_CLIENT_JS}"
-    docker exec q3js-content-server-1 \
-        sed -i 's/return callback(/return (typeof callback === "function") \&\& callback(/g' \
-        "${Q3JS_CLIENT_JS}" 2>/dev/null \
-        && bashio::log.info "Web client patch applied." \
-        || bashio::log.warning "Web client patch failed"
-else
-    bashio::log.warning "Could not find __ioquake3_secure.js in content server container"
-fi
 
 bashio::log.info "Q3JS stack is up!"
 bashio::log.info "  Web client : https://${HOST_IP}:8443"
