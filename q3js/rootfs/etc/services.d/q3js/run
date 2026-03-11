@@ -151,8 +151,12 @@ docker builder prune -af 2>/dev/null || true
 CERT_DIR="${WORK_DIR}/config/certificates"
 mkdir -p "${CERT_DIR}"
 
-if [ ! -f "${CERT_DIR}/q3js.crt" ]; then
-    bashio::log.info "Generating self-signed certificate..."
+if [ -f "/share/q3js/dual-wildcard.crt" ] && [ -f "/share/q3js/dual-wildcard.key" ]; then
+    bashio::log.info "Using wildcard cert from /share/q3js/dual-wildcard.crt"
+    cp "/share/q3js/dual-wildcard.crt" "${CERT_DIR}/q3js.crt"
+    cp "/share/q3js/dual-wildcard.key" "${CERT_DIR}/q3js.key"
+else
+    bashio::log.warning "Wildcard cert not found at /share/q3js/dual-wildcard.crt — falling back to self-signed"
     openssl req -x509 -nodes -days 3650 -newkey rsa:2048 \
         -keyout "${CERT_DIR}/q3js.key" \
         -out "${CERT_DIR}/q3js.crt" \
