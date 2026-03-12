@@ -1,7 +1,7 @@
 ---
 name: "Q3JS - Quake III Arena"
 description: "Run a Quake III Arena server in the browser using QuakeJS. Manages all game containers via Docker Compose."
-version: "2.6.1"
+version: "2.6.2"
 slug: "q3js"
 url: "https://github.com/rogerquake/ha-q3js-addon"
 init: false
@@ -27,6 +27,7 @@ options:
   rcon_password: "homeassistant"
   restart_hours: 8
   ws_port: 27961
+  connect_server: ""
   bots:
     - name: "Keel"
       skill: 3
@@ -40,6 +41,7 @@ schema:
   rcon_password: str
   restart_hours: int
   ws_port: int
+  connect_server: str
   bots:
     - name: str
       skill: "int(1,5)"
