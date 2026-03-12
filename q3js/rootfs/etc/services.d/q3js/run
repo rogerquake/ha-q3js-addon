@@ -50,7 +50,7 @@ bashio::log.info "Host work dir:   ${HOST_WORK_DIR}"
 # --------------------------------------------------------------------------
 # Host LAN IP (hardcoded)
 # --------------------------------------------------------------------------
-HOST_IP="homeassistant-test.roger.lan"
+HOST_IP="192.168.4.214"
 bashio::log.info "Host LAN IP: ${HOST_IP}"
 
 # --------------------------------------------------------------------------
@@ -128,7 +128,7 @@ bashio::log.info "Remapping port 443 -> 8443..."
 sed -i 's|"443:443"|"8443:443"|g; s|- 443:443|- 8443:443|g' "${COMPOSE_FILE}"
 
 # --------------------------------------------------------------------------
-# Patch ALL Dockerfiles: strip quakejs-files and fix DirtyInstallers
+# Patch ALL Dockerfiles: strip quakejs-files from npm install
 # --------------------------------------------------------------------------
 bashio::log.info "Patching Dockerfiles to remove quakejs-files..."
 find "${WORK_DIR}/build" -name "Dockerfile" 2>/dev/null | while read -r DF; do
@@ -148,6 +148,19 @@ done
 
 bashio::log.info "Pruning Docker build cache..."
 docker builder prune -af 2>/dev/null || true
+
+# --------------------------------------------------------------------------
+# Patch index.ejs: enable auto-connect to dedicated server
+# --------------------------------------------------------------------------
+WS_PORT=$(bashio::config 'ws_port' 2>/dev/null || echo "27961")
+INDEX_EJS=$(find "${WORK_DIR}" -name "index.ejs" | head -1)
+if [ -n "${INDEX_EJS}" ]; then
+    bashio::log.info "Patching index.ejs for auto-connect: ${HOST_IP}:${WS_PORT}"
+    sed -i "s|// args.push.apply.*\+connect.*|args.push.apply( args, [ \"+connect\", \"${HOST_IP}:${WS_PORT}\" ] )|" "${INDEX_EJS}"
+    bashio::log.info "index.ejs connect patch applied"
+else
+    bashio::log.warning "index.ejs not found — auto-connect will not be set"
+fi
 
 # --------------------------------------------------------------------------
 # Copy wildcard certificate from /share/q3js
@@ -247,6 +260,7 @@ fi
 bashio::log.info "Starting Q3JS containers..."
 docker compose -f "${COMPOSE_FILE}" up -d 2>&1 | tee "${LOG_DIR}/compose.log"
 
+# --------------------------------------------------------------------------
 bashio::log.info "Q3JS stack is up!"
 bashio::log.info "  Web client : https://${HOST_IP}:8443"
 bashio::log.info "  WSS proxy  : wss://${HOST_IP}:27961"
