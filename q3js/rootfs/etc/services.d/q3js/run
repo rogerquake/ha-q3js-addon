@@ -50,7 +50,7 @@ bashio::log.info "Host work dir:   ${HOST_WORK_DIR}"
 # --------------------------------------------------------------------------
 # Host LAN IP (hardcoded)
 # --------------------------------------------------------------------------
-HOST_IP="homeassistant-test.roger.lan"
+HOST_IP="192.168.4.214"
 bashio::log.info "Host LAN IP: ${HOST_IP}"
 
 # --------------------------------------------------------------------------
@@ -152,12 +152,16 @@ docker builder prune -af 2>/dev/null || true
 # --------------------------------------------------------------------------
 # Patch index.ejs: enable auto-connect to dedicated server
 # --------------------------------------------------------------------------
-WS_PORT=$(bashio::config 'ws_port' 2>/dev/null || echo "27961")
+CONNECT_SERVER=$(bashio::config 'connect_server' 2>/dev/null || echo "")
 INDEX_EJS=$(find "${WORK_DIR}" -name "index.ejs" | head -1)
 if [ -n "${INDEX_EJS}" ]; then
-    bashio::log.info "Patching index.ejs for auto-connect: ${HOST_IP}:${WS_PORT}"
-    sed -i "s|// args.push.apply.*\+connect.*|args.push.apply( args, [ \"+connect\", \"${HOST_IP}:${WS_PORT}\" ] )|" "${INDEX_EJS}"
-    bashio::log.info "index.ejs connect patch applied"
+    if [ -n "${CONNECT_SERVER}" ]; then
+        bashio::log.info "Patching index.ejs for auto-connect: ${CONNECT_SERVER}"
+        sed -i "s|// args.push.apply.*\+connect.*|args.push.apply( args, [ \"+connect\", \"${CONNECT_SERVER}\" ] )|" "${INDEX_EJS}"
+        bashio::log.info "index.ejs connect patch applied"
+    else
+        bashio::log.warning "connect_server not set — skipping auto-connect patch"
+    fi
 else
     bashio::log.warning "index.ejs not found — auto-connect will not be set"
 fi
