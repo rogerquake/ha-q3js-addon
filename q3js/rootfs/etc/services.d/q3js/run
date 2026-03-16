@@ -167,7 +167,6 @@ find "${WORK_DIR}/build" -name "Dockerfile" 2>/dev/null | while read -r DF; do
     # Patch 2: bare "callback(" — ReferenceError: callback is not defined (demo install path)
     # typeof guard works for both undeclared and non-function cases without throwing
     echo 'RUN for F in /app/build/ioquake3_secure.js /app/build/ioq3ded_secure.js; do [ -f "$F" ] && sed -i '"'"'s/return callback(/return (typeof callback === "function") \&\& callback(/g'"'"' "$F"; done' >> "${DF}"
-    echo 'RUN for F in /app/build/ioquake3_secure.js /app/build/ioq3ded_secure.js; do [ -f "$F" ] && sed -i '"'"'s/\([^a-z]\)callback(\([^)]\)/(typeof callback === "function") \&\& callback(/g'"'"' "$F"; done' >> "${DF}"
     bashio::log.info "  quakejs-files patches: $(grep -c 'quakejs-files' "${DF}")"
     bashio::log.info "  DirtyInstallers patch added (return + bare callback)"
 done
