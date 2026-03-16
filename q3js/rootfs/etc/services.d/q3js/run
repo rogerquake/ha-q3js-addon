@@ -50,7 +50,7 @@ bashio::log.info "Host work dir:   ${HOST_WORK_DIR}"
 # --------------------------------------------------------------------------
 # Host LAN IP (hardcoded)
 # --------------------------------------------------------------------------
-HOST_IP="homeassistant-test.roger.lan"
+HOST_IP="192.168.4.214"
 bashio::log.info "Host LAN IP: ${HOST_IP}"
 
 # --------------------------------------------------------------------------
@@ -111,6 +111,28 @@ for PAKFILE in /share/q3js/assets/baseq3/*.pk3; do
     }" "${COMPOSE_FILE}"
     bashio::log.info "  mounted: ${PAKNAME}"
 done
+# Mount RA3 pak files if present
+if [ -d "/share/q3js/assets/ra3" ] && ls /share/q3js/assets/ra3/*.pk3 >/dev/null 2>&1; then
+    for PAKFILE in /share/q3js/assets/ra3/*.pk3; do
+        [ -f "${PAKFILE}" ] || continue
+        PAKNAME=$(basename "${PAKFILE}")
+        sed -i "/dedicated-server.*game\.log:\/app\/game\.log/{
+            a\      - ${HOST_SHARE}/q3js/assets/ra3/${PAKNAME}:/app/base/ra3/${PAKNAME}:ro
+        }" "${COMPOSE_FILE}"
+        bashio::log.info "  mounted ra3: ${PAKNAME}"
+    done
+fi
+# Mount CPMA pak files if present
+if [ -d "/share/q3js/assets/cpma" ] && ls /share/q3js/assets/cpma/*.pk3 >/dev/null 2>&1; then
+    for PAKFILE in /share/q3js/assets/cpma/*.pk3; do
+        [ -f "${PAKFILE}" ] || continue
+        PAKNAME=$(basename "${PAKFILE}")
+        sed -i "/dedicated-server.*game\.log:\/app\/game\.log/{
+            a\      - ${HOST_SHARE}/q3js/assets/cpma/${PAKNAME}:/app/base/cpma/${PAKNAME}:ro
+        }" "${COMPOSE_FILE}"
+        bashio::log.info "  mounted cpma: ${PAKNAME}"
+    done
+fi
 bashio::log.info "Dedicated server pak mounts:"
 grep -A30 "q3js-dedicated-server" "${COMPOSE_FILE}" | grep "pk3" || true
 
@@ -141,23 +163,37 @@ find "${WORK_DIR}/build" -name "Dockerfile" 2>/dev/null | while read -r DF; do
     }' "${DF}" > "${DF}.patched" && mv "${DF}.patched" "${DF}"
     # Patch DirtyInstallers callback bug at build time — survives all restarts
     # Covers both web client (ioquake3_secure.js) and dedicated server (ioq3ded_secure.js)
+    # Patch 1: "return callback(" — TypeError: callback is not a function
+    # Patch 2: bare "callback(" — ReferenceError: callback is not defined (demo install path)
+    # typeof guard works for both undeclared and non-function cases without throwing
     echo 'RUN for F in /app/build/ioquake3_secure.js /app/build/ioq3ded_secure.js; do [ -f "$F" ] && sed -i '"'"'s/return callback(/return (typeof callback === "function") \&\& callback(/g'"'"' "$F"; done' >> "${DF}"
+    echo 'RUN for F in /app/build/ioquake3_secure.js /app/build/ioq3ded_secure.js; do [ -f "$F" ] && sed -i '"'"'s/\([^a-z]\)callback(\([^)]\)/(typeof callback === "function") \&\& callback(/g'"'"' "$F"; done' >> "${DF}"
     bashio::log.info "  quakejs-files patches: $(grep -c 'quakejs-files' "${DF}")"
-    bashio::log.info "  DirtyInstallers patch added"
+    bashio::log.info "  DirtyInstallers patch added (return + bare callback)"
 done
 
 bashio::log.info "Pruning Docker build cache..."
 docker builder prune -af 2>/dev/null || true
 
 # --------------------------------------------------------------------------
-# Patch index.ejs: enable auto-connect to dedicated server
+# Patch index.ejs: remove username prompt, skip EULA, auto-connect
 # --------------------------------------------------------------------------
 CONNECT_SERVER=$(bashio::config 'connect_server' 2>/dev/null || echo "")
 INDEX_EJS=$(find "${WORK_DIR}" -name "index.ejs" | head -1)
 if [ -n "${INDEX_EJS}" ]; then
+    # 1. Pre-accept EULA so the popup never appears
+    sed -i '/var args = \[/a\t	args.push.apply( args, [ "+set", "cl_q3confirmed", "1" ] );' "${INDEX_EJS}"
+    bashio::log.info "index.ejs EULA skip patch applied"
+
+    # 2. Remove the username prompt/cookie block — name is set by the card via URL param
+    #    Delete from the getCookie("username") line through args.push("+name", username)
+    sed -i '/let username = getCookie/,/args.push.apply.*"+name"/d' "${INDEX_EJS}"
+    bashio::log.info "index.ejs username prompt removed"
+
+    # 3. Auto-connect if configured
     if [ -n "${CONNECT_SERVER}" ]; then
         bashio::log.info "Patching index.ejs for auto-connect: ${CONNECT_SERVER}"
-        sed -i "s|// args.push.apply.*\+connect.*|args.push.apply( args, [ \"+connect\", \"${CONNECT_SERVER}\" ] )|" "${INDEX_EJS}"
+        sed -i "s|// args.push.apply.*\+connect.*|args.push.apply( args, [ "+connect", "${CONNECT_SERVER}" ] )|" "${INDEX_EJS}"
         bashio::log.info "index.ejs connect patch applied"
     else
         bashio::log.warning "connect_server not set — skipping auto-connect patch"
@@ -205,13 +241,74 @@ else
     bashio::log.warning "No pak files found at /share/q3js/assets/baseq3/ — game will not load!"
 fi
 
+# Copy RA3 assets to content server if present
+if [ -d "/share/q3js/assets/ra3" ] && ls /share/q3js/assets/ra3/*.pk3 >/dev/null 2>&1; then
+    bashio::log.info "Copying RA3 pak files to content server..."
+    mkdir -p "${WORK_DIR}/assets/ra3"
+    cp /share/q3js/assets/ra3/*.pk3 "${WORK_DIR}/assets/ra3/"
+fi
+# Copy CPMA assets to content server if present
+if [ -d "/share/q3js/assets/cpma" ] && ls /share/q3js/assets/cpma/*.pk3 >/dev/null 2>&1; then
+    bashio::log.info "Copying CPMA pak files to content server..."
+    mkdir -p "${WORK_DIR}/assets/cpma"
+    cp /share/q3js/assets/cpma/*.pk3 "${WORK_DIR}/assets/cpma/"
+fi
+
 # --------------------------------------------------------------------------
 # Write server.cfg
 # --------------------------------------------------------------------------
 mkdir -p "${WORK_DIR}/config/dedicated-server/baseq3"
 mkdir -p "${WORK_DIR}/config/dedicated-server/cpma"
+mkdir -p "${WORK_DIR}/config/dedicated-server/ra3"
 
-cat > "${WORK_DIR}/config/dedicated-server/baseq3/server.cfg" << CFGEOF
+BOT_COUNT=$(bashio::config 'bots | length')
+BOT_SKILL=$(bashio::config "bots[0].skill")
+
+if [ "${GAMEMODE}" = "cpma" ]; then
+    # CPMA — ProMode with RA3 map support and bots
+    cat > "${WORK_DIR}/config/dedicated-server/cpma/server.cfg" << CPMACFG
+seta sv_hostname "HA QuakeJS CPMA Server"
+seta sv_maxclients 12
+seta g_motd "Home Assistant CPMA"
+seta fs_game "cpma"
+seta g_gametype 1
+seta fraglimit ${FRAG_LIMIT}
+seta timelimit ${TIME_LIMIT}
+seta rconpassword "${RCON_PASS}"
+seta g_log "/app/game.log"
+seta g_logSync 1
+seta bot_enable 1
+CPMACFG
+    echo "seta g_spSkill ${BOT_SKILL}" >> "${WORK_DIR}/config/dedicated-server/cpma/server.cfg"
+    echo "map ${MAP_NAME}" >> "${WORK_DIR}/config/dedicated-server/cpma/server.cfg"
+    for i in $(seq 0 $((BOT_COUNT - 1))); do
+        BOT_NAME=$(bashio::config "bots[${i}].name")
+        BOT_SKILL=$(bashio::config "bots[${i}].skill")
+        echo "addbot ${BOT_NAME} ${BOT_SKILL}" >> "${WORK_DIR}/config/dedicated-server/cpma/server.cfg"
+    done
+    cp "${WORK_DIR}/config/dedicated-server/cpma/server.cfg"        "${WORK_DIR}/config/dedicated-server/baseq3/server.cfg"
+
+elif [ "${GAMEMODE}" = "ra3" ]; then
+    # RA3 — arena-based, no bots
+    cat > "${WORK_DIR}/config/dedicated-server/ra3/server.cfg" << RA3CFG
+seta sv_hostname "HA QuakeJS RA3 Server"
+seta sv_maxclients 12
+seta g_motd "Home Assistant RA3"
+seta fs_game "ra3"
+seta g_gametype 1
+seta fraglimit ${FRAG_LIMIT}
+seta timelimit ${TIME_LIMIT}
+seta rconpassword "${RCON_PASS}"
+seta g_log "/app/game.log"
+seta g_logSync 1
+RA3CFG
+    echo "map ${MAP_NAME}" >> "${WORK_DIR}/config/dedicated-server/ra3/server.cfg"
+    cp "${WORK_DIR}/config/dedicated-server/ra3/server.cfg"        "${WORK_DIR}/config/dedicated-server/baseq3/server.cfg"
+    cp "${WORK_DIR}/config/dedicated-server/ra3/server.cfg"        "${WORK_DIR}/config/dedicated-server/cpma/server.cfg"
+
+else
+    # baseq3 — standard mode with bots
+    cat > "${WORK_DIR}/config/dedicated-server/baseq3/server.cfg" << CFGEOF
 seta sv_hostname "HA QuakeJS Server"
 seta sv_maxclients 12
 seta g_motd "Home Assistant Quake 3"
@@ -223,20 +320,15 @@ seta g_log "/app/game.log"
 seta g_logSync 1
 seta bot_enable 1
 CFGEOF
-
-BOT_COUNT=$(bashio::config 'bots | length')
-BOT_SKILL=$(bashio::config "bots[0].skill")
-echo "seta g_spSkill ${BOT_SKILL}" >> "${WORK_DIR}/config/dedicated-server/baseq3/server.cfg"
-echo "map ${MAP_NAME}" >> "${WORK_DIR}/config/dedicated-server/baseq3/server.cfg"
-# addbot after map in server.cfg executes post map-load
-for i in $(seq 0 $((BOT_COUNT - 1))); do
-    BOT_NAME=$(bashio::config "bots[${i}].name")
-    BOT_SKILL=$(bashio::config "bots[${i}].skill")
-    echo "addbot ${BOT_NAME} ${BOT_SKILL}" >> "${WORK_DIR}/config/dedicated-server/baseq3/server.cfg"
-done
-
-cp "${WORK_DIR}/config/dedicated-server/baseq3/server.cfg" \
-   "${WORK_DIR}/config/dedicated-server/cpma/server.cfg"
+    echo "seta g_spSkill ${BOT_SKILL}" >> "${WORK_DIR}/config/dedicated-server/baseq3/server.cfg"
+    echo "map ${MAP_NAME}" >> "${WORK_DIR}/config/dedicated-server/baseq3/server.cfg"
+    for i in $(seq 0 $((BOT_COUNT - 1))); do
+        BOT_NAME=$(bashio::config "bots[${i}].name")
+        BOT_SKILL=$(bashio::config "bots[${i}].skill")
+        echo "addbot ${BOT_NAME} ${BOT_SKILL}" >> "${WORK_DIR}/config/dedicated-server/baseq3/server.cfg"
+    done
+    cp "${WORK_DIR}/config/dedicated-server/baseq3/server.cfg"        "${WORK_DIR}/config/dedicated-server/cpma/server.cfg"
+fi
 
 # --------------------------------------------------------------------------
 # Write .env
