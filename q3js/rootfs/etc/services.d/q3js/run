@@ -188,7 +188,7 @@ if [ -n "${INDEX_EJS}" ]; then
     #    Deletes from "let username" line through the "+name" push line inclusive
     awk '
         /let username = getCookie/ { skip=1 }
-        skip && /args\.push\.apply.*"\+name"/ { skip=0; next }
+        skip && /\+name/ { skip=0; next }
         !skip { print }
     ' "${INDEX_EJS}" > "${INDEX_EJS}.tmp" && mv "${INDEX_EJS}.tmp" "${INDEX_EJS}"
     bashio::log.info "index.ejs username prompt removed"
