@@ -184,9 +184,25 @@ if [ -n "${INDEX_EJS}" ]; then
     sed -i '/var args = \[/a\t	args.push.apply( args, [ "+set", "cl_q3confirmed", "1" ] );' "${INDEX_EJS}"
     bashio::log.info "index.ejs EULA skip patch applied"
 
-    # 2. Remove the username prompt/cookie block — name is set by the card via URL param
-    #    Delete from the getCookie("username") line through args.push("+name", username)
-    sed -i '/let username = getCookie/,/args.push.apply.*"+name"/d' "${INDEX_EJS}"
+    # 2. Remove the username prompt/cookie block using Python for precision
+    python3 - "${INDEX_EJS}" << 'PYEOF'
+import sys, re
+path = sys.argv[1]
+with open(path) as f:
+    content = f.read()
+# Replace the entire username block (getCookie through args.push "+name") with nothing
+content = re.sub(
+    r"
+\s*let username = getCookie\(.*?
+\s*args\.push\.apply\(\s*args\s*,\s*\[\s*"\+name".*?\]\s*\);",
+    "",
+    content,
+    flags=re.DOTALL
+)
+with open(path, 'w') as f:
+    f.write(content)
+print("[Q3JS] username prompt removed from index.ejs")
+PYEOF
     bashio::log.info "index.ejs username prompt removed"
 
     # 3. Auto-connect if configured
