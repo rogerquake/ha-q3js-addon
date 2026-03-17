@@ -139,18 +139,8 @@ fi
 bashio::log.info "Dedicated server pak mounts:"
 grep -A30 "q3js-dedicated-server" "${COMPOSE_FILE}" | grep "pk3" || true
 
-# --------------------------------------------------------------------------
-# Patch dedicated server: allow self-signed certs
-# --------------------------------------------------------------------------
-bashio::log.info "Patching NODE_TLS_REJECT_UNAUTHORIZED..."
-sed -i '/q3js-dedicated-server-1:/{:loop;n;/volumes:/!b loop;i\    environment:\n      - NODE_TLS_REJECT_UNAUTHORIZED=0
-}' "${COMPOSE_FILE}"
-
-# --------------------------------------------------------------------------
-# Remap port 443 -> 8443 (443 taken by Nginx Proxy Manager)
-# --------------------------------------------------------------------------
-bashio::log.info "Remapping port 443 -> 8443..."
-sed -i 's|"443:443"|"8443:443"|g; s|- 443:443|- 8443:443|g' "${COMPOSE_FILE}"
+# NODE_TLS_REJECT_UNAUTHORIZED and port 8443 are now set directly in the
+# fork's compose.yml — no runtime patching needed
 
 # --------------------------------------------------------------------------
 # Patch index.ejs: inject connect server if configured
@@ -168,8 +158,6 @@ else
     bashio::log.warning "index.ejs not found"
 fi
 
-bashio::log.info "Pruning Docker build cache..."
-docker builder prune -af 2>/dev/null || true
 
 # --------------------------------------------------------------------------
 # Copy wildcard certificate from /share/q3js
