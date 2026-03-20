@@ -51,7 +51,7 @@ bashio::log.info "Host work dir:   ${HOST_WORK_DIR}"
 # --------------------------------------------------------------------------
 # Host LAN IP (hardcoded)
 # --------------------------------------------------------------------------
-HOST_IP="homeassistant-test.roger.lan:9000"
+HOST_IP="homeassistant-test.roger.lan"
 bashio::log.info "Host LAN IP: ${HOST_IP}"
 
 # --------------------------------------------------------------------------
