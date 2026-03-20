@@ -51,7 +51,7 @@ bashio::log.info "Host work dir:   ${HOST_WORK_DIR}"
 # --------------------------------------------------------------------------
 # Host LAN IP (hardcoded)
 # --------------------------------------------------------------------------
-HOST_IP="homeassistant-test.roger.lan"
+HOST_IP="192.168.4.214"
 bashio::log.info "Host LAN IP: ${HOST_IP}"
 
 # --------------------------------------------------------------------------
@@ -113,29 +113,19 @@ for PAKFILE in /share/q3js/assets/baseq3/*.pk3; do
     bashio::log.info "  mounted baseq3: ${PAKNAME}"
 done
 
-# Mount RA3 pak files if present
-if [ -d "/share/q3js/assets/ra3" ] && ls /share/q3js/assets/ra3/*.pk3 >/dev/null 2>&1; then
-    for PAKFILE in /share/q3js/assets/ra3/*.pk3; do
+# Mount all mod pak files generically (ra3, cpma, osp, and any future mods)
+for MOD_DIR in /share/q3js/assets/*/; do
+    MOD_NAME=$(basename "${MOD_DIR}")
+    [ "${MOD_NAME}" = "baseq3" ] && continue  # already mounted above
+    for PAKFILE in "${MOD_DIR}"*.pk3; do
         [ -f "${PAKFILE}" ] || continue
         PAKNAME=$(basename "${PAKFILE}")
         sed -i "/dedicated-server.*game\.log:\/app\/game\.log/{
-            a\      - ${HOST_SHARE}/q3js/assets/ra3/${PAKNAME}:/app/base/ra3/${PAKNAME}:ro
+            a\      - ${HOST_SHARE}/q3js/assets/${MOD_NAME}/${PAKNAME}:/app/base/${MOD_NAME}/${PAKNAME}:ro
         }" "${COMPOSE_FILE}"
-        bashio::log.info "  mounted ra3: ${PAKNAME}"
+        bashio::log.info "  mounted ${MOD_NAME}: ${PAKNAME}"
     done
-fi
-
-# Mount CPMA pak files if present
-if [ -d "/share/q3js/assets/cpma" ] && ls /share/q3js/assets/cpma/*.pk3 >/dev/null 2>&1; then
-    for PAKFILE in /share/q3js/assets/cpma/*.pk3; do
-        [ -f "${PAKFILE}" ] || continue
-        PAKNAME=$(basename "${PAKFILE}")
-        sed -i "/dedicated-server.*game\.log:\/app\/game\.log/{
-            a\      - ${HOST_SHARE}/q3js/assets/cpma/${PAKNAME}:/app/base/cpma/${PAKNAME}:ro
-        }" "${COMPOSE_FILE}"
-        bashio::log.info "  mounted cpma: ${PAKNAME}"
-    done
-fi
+done
 bashio::log.info "Dedicated server pak mounts:"
 grep -A30 "q3js-dedicated-server" "${COMPOSE_FILE}" | grep "pk3" || true
 
@@ -197,17 +187,16 @@ else
     bashio::log.warning "No pak files found at /share/q3js/assets/baseq3/ — game will not load!"
 fi
 
-if [ -d "/share/q3js/assets/ra3" ] && ls /share/q3js/assets/ra3/*.pk3 >/dev/null 2>&1; then
-    bashio::log.info "Copying RA3 pak files to content server..."
-    mkdir -p "${WORK_DIR}/assets/ra3"
-    cp /share/q3js/assets/ra3/*.pk3 "${WORK_DIR}/assets/ra3/"
-fi
-
-if [ -d "/share/q3js/assets/cpma" ] && ls /share/q3js/assets/cpma/*.pk3 >/dev/null 2>&1; then
-    bashio::log.info "Copying CPMA pak files to content server..."
-    mkdir -p "${WORK_DIR}/assets/cpma"
-    cp /share/q3js/assets/cpma/*.pk3 "${WORK_DIR}/assets/cpma/"
-fi
+# Copy all mod asset folders generically (ra3, cpma, osp, and any future mods)
+for MOD_DIR in /share/q3js/assets/*/; do
+    MOD_NAME=$(basename "${MOD_DIR}")
+    [ "${MOD_NAME}" = "baseq3" ] && continue  # already copied above
+    if ls "${MOD_DIR}"*.pk3 >/dev/null 2>&1; then
+        bashio::log.info "Copying ${MOD_NAME} pak files to content server..."
+        mkdir -p "${WORK_DIR}/assets/${MOD_NAME}"
+        cp "${MOD_DIR}"*.pk3 "${WORK_DIR}/assets/${MOD_NAME}/"
+    fi
+done
 
 # --------------------------------------------------------------------------
 # Write server.cfg
