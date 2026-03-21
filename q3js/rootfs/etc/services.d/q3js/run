@@ -113,8 +113,20 @@ for PAKFILE in /share/q3js/assets/baseq3/*.pk3; do
     bashio::log.info "  mounted baseq3: ${PAKNAME}"
 done
 
-# Mod paks (non-baseq3) are served via the content server manifest
-# and downloaded by the dedicated server at runtime — no direct mounting needed
+# Mount all mod pak files directly into dedicated server (same as baseq3)
+# Direct mounting makes paks available immediately without waiting for download
+for MOD_DIR in /share/q3js/assets/*/; do
+    MOD_NAME=$(basename "${MOD_DIR}")
+    [ "${MOD_NAME}" = "baseq3" ] && continue  # already mounted above
+    for PAKFILE in "${MOD_DIR}"*.pk3; do
+        [ -f "${PAKFILE}" ] || continue
+        PAKNAME=$(basename "${PAKFILE}")
+        sed -i "/dedicated-server.*game\.log:\/app\/game\.log/{
+            a\      - ${HOST_SHARE}/q3js/assets/${MOD_NAME}/${PAKNAME}:/app/base/${MOD_NAME}/${PAKNAME}:ro
+        }" "${COMPOSE_FILE}"
+        bashio::log.info "  mounted ${MOD_NAME}: ${PAKNAME}"
+    done
+done
 bashio::log.info "Dedicated server pak mounts:"
 grep -A30 "q3js-dedicated-server" "${COMPOSE_FILE}" | grep "pk3" || true
 
