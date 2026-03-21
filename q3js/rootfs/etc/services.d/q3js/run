@@ -101,8 +101,6 @@ bashio::log.info "Adding volume mounts to dedicated server..."
 MOUNTS_FILE="${WORK_DIR}/.extra_mounts"
 rm -f "${MOUNTS_FILE}"
 
-echo "      - ${HOST_WORK_DIR}/game.log:/app/game.log" >> "${MOUNTS_FILE}"
-
 for PAKFILE in /share/q3js/assets/baseq3/*.pk3; do
     [ -f "${PAKFILE}" ] || continue
     PAKNAME=$(basename "${PAKFILE}")
@@ -238,6 +236,7 @@ seta rconpassword "${RCON_PASS}"
 seta g_log "/app/game.log"
 seta g_logSync 1
 seta bot_enable 1
+seta sv_pure 0
 CPMACFG
     echo "seta g_spSkill ${BOT_SKILL}" >> "${WORK_DIR}/config/dedicated-server/cpma/server.cfg"
     echo "map ${MAP_NAME}" >> "${WORK_DIR}/config/dedicated-server/cpma/server.cfg"
@@ -261,6 +260,7 @@ seta timelimit ${TIME_LIMIT}
 seta rconpassword "${RCON_PASS}"
 seta g_log "/app/game.log"
 seta g_logSync 1
+seta sv_pure 0
 RA3CFG
     echo "map ${MAP_NAME}" >> "${WORK_DIR}/config/dedicated-server/ra3/server.cfg"
     cp "${WORK_DIR}/config/dedicated-server/ra3/server.cfg" \
@@ -280,6 +280,7 @@ seta rconpassword "${RCON_PASS}"
 seta g_log "/app/game.log"
 seta g_logSync 1
 seta bot_enable 1
+seta sv_pure 0
 CFGEOF
     echo "seta g_spSkill ${BOT_SKILL}" >> "${WORK_DIR}/config/dedicated-server/baseq3/server.cfg"
     echo "map ${MAP_NAME}" >> "${WORK_DIR}/config/dedicated-server/baseq3/server.cfg"
