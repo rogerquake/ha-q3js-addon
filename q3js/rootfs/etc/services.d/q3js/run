@@ -144,8 +144,11 @@ bashio::log.info "Volume mounts injected"
 grep -A60 "q3js-dedicated-server-1:" "${COMPOSE_FILE}" | grep "pk3\|game.log" | head -20 || true
 
 
-# NODE_TLS_REJECT_UNAUTHORIZED and port 8443 are now set directly in the
-# fork's compose.yml — no runtime patching needed
+# Ensure all env vars from .env are explicitly passed to dedicated server
+# This overrides any ENV defaults baked into the Docker image
+sed -i '/q3js-dedicated-server-1:/,/volumes:/{
+    /NODE_TLS_REJECT_UNAUTHORIZED/a\      - Q3JS_DOMAIN\n      - Q3JS_SERVER_GAMEMODE\n      - Q3JS_SERVER_DEDICATED\n      - Q3JS_SERVER_RESTART_HOURS
+}' "${COMPOSE_FILE}"
 
 # --------------------------------------------------------------------------
 # Patch index.ejs: inject connect server if configured
