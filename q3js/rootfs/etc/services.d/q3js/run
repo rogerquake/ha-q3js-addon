@@ -309,15 +309,30 @@ grep -A1 "volumes:" "${COMPOSE_FILE}" | grep " - /" | head -30 || true
 # --------------------------------------------------------------------------
 # Build and start via docker compose
 # --------------------------------------------------------------------------
-bashio::log.info "Building Q3JS containers (first run takes several minutes)..."
-docker compose -f "${COMPOSE_FILE}" build 2>&1 | tee "${LOG_DIR}/build.log"
-if [ $? -ne 0 ]; then
-    bashio::log.error "Build failed! Check /var/log/q3js/build.log"
-    bashio::exit.nok "Build failed"
+FORCE_REBUILD=$(bashio::config 'force_rebuild' 2>/dev/null || echo "false")
+
+# Check if images already exist (skip build if they do and force_rebuild is false)
+IMAGES_EXIST=true
+for SVC in web-client dedicated-server master-server content-server wss-proxy; do
+    if ! docker image inspect "quakejs-dockerized-ssl-q3js-${SVC}" >/dev/null 2>&1; then
+        IMAGES_EXIST=false
+        break
+    fi
+done
+
+if [ "${FORCE_REBUILD}" = "true" ] || [ "${IMAGES_EXIST}" = "false" ]; then
+    bashio::log.info "Building Q3JS containers (this takes several minutes)..."
+    docker compose -f "${COMPOSE_FILE}" build 2>&1 | tee "${LOG_DIR}/build.log"
+    if [ $? -ne 0 ]; then
+        bashio::log.error "Build failed! Check /var/log/q3js/build.log"
+        bashio::exit.nok "Build failed"
+    fi
+else
+    bashio::log.info "Skipping build — images exist and force_rebuild is false"
 fi
 
 bashio::log.info "Starting Q3JS containers..."
-docker compose -f "${COMPOSE_FILE}" up -d 2>&1 | tee "${LOG_DIR}/compose.log"
+docker compose -f "${COMPOSE_FILE}" up -d --force-recreate 2>&1 | tee "${LOG_DIR}/compose.log"
 
 # --------------------------------------------------------------------------
 bashio::log.info "Q3JS stack is up!"
