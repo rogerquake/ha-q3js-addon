@@ -92,43 +92,83 @@ bashio::log.info "Patching compose.yml volume paths..."
 sed -i "s|      - \./|      - ${HOST_WORK_DIR}/|g" "${COMPOSE_FILE}"
 
 # --------------------------------------------------------------------------
-# Add game log volume mount to dedicated server
+# Add game log + pak mounts to dedicated server via Python (reliable YAML edit)
 # --------------------------------------------------------------------------
 touch "${WORK_DIR}/game.log"
-bashio::log.info "Patching dedicated server game log volume..."
-sed -i "/dedicated-server.*server\.cfg:\/app\/base\/cpma\/server\.cfg/{
-    a\      - ${HOST_WORK_DIR}/game.log:/app/game.log
-}" "${COMPOSE_FILE}"
+bashio::log.info "Adding volume mounts to dedicated server..."
 
-# --------------------------------------------------------------------------
-# Mount pak files directly into dedicated server
-# --------------------------------------------------------------------------
-bashio::log.info "Mounting pak files into dedicated server..."
-for PAKFILE in /share/q3js/assets/baseq3/*.pk3; do
-    [ -f "${PAKFILE}" ] || continue
-    PAKNAME=$(basename "${PAKFILE}")
-    sed -i "/dedicated-server.*game\.log:\/app\/game\.log/{
-        a\      - ${HOST_SHARE}/q3js/assets/baseq3/${PAKNAME}:/app/base/baseq3/${PAKNAME}:ro
-    }" "${COMPOSE_FILE}"
-    bashio::log.info "  mounted baseq3: ${PAKNAME}"
-done
+python3 - "${COMPOSE_FILE}" "${HOST_WORK_DIR}" "${HOST_SHARE}" << 'PYEOF'
+import sys, os, re
 
-# Mount all mod pak files directly into dedicated server (same as baseq3)
-# Direct mounting makes paks available immediately without waiting for download
-for MOD_DIR in /share/q3js/assets/*/; do
-    MOD_NAME=$(basename "${MOD_DIR}")
-    [ "${MOD_NAME}" = "baseq3" ] && continue  # already mounted above
-    for PAKFILE in "${MOD_DIR}"*.pk3; do
-        [ -f "${PAKFILE}" ] || continue
-        PAKNAME=$(basename "${PAKFILE}")
-        sed -i "/dedicated-server.*game\.log:\/app\/game\.log/{
-            a\      - ${HOST_SHARE}/q3js/assets/${MOD_NAME}/${PAKNAME}:/app/base/${MOD_NAME}/${PAKNAME}:ro
-        }" "${COMPOSE_FILE}"
-        bashio::log.info "  mounted ${MOD_NAME}: ${PAKNAME}"
-    done
-done
+compose_path = sys.argv[1]
+host_work_dir = sys.argv[2]
+host_share = sys.argv[3]
+assets_dir = "/share/q3js/assets"
+
+with open(compose_path) as f:
+    content = f.read()
+
+# Build list of extra volume mounts
+extra_mounts = []
+extra_mounts.append(f"      - {host_work_dir}/game.log:/app/game.log")
+
+# baseq3 paks
+baseq3_dir = os.path.join(assets_dir, "baseq3")
+if os.path.isdir(baseq3_dir):
+    for pk3 in sorted(os.listdir(baseq3_dir)):
+        if pk3.endswith(".pk3"):
+            extra_mounts.append(f"      - {host_share}/q3js/assets/baseq3/{pk3}:/app/base/baseq3/{pk3}:ro")
+
+# All other mod dirs
+for mod_name in sorted(os.listdir(assets_dir)):
+    if mod_name == "baseq3":
+        continue
+    mod_dir = os.path.join(assets_dir, mod_name)
+    if os.path.isdir(mod_dir):
+        for pk3 in sorted(os.listdir(mod_dir)):
+            if pk3.endswith(".pk3"):
+                extra_mounts.append(f"      - {host_share}/q3js/assets/{mod_name}/{pk3}:/app/base/{mod_name}/{pk3}:ro")
+
+mounts_str = "
+".join(extra_mounts)
+print(f"[Q3JS] Adding {len(extra_mounts)} volume mounts to dedicated server")
+
+# Find the dedicated server volumes section and append mounts after the last existing volume
+# Pattern: find q3js-dedicated-server-1 service and its volumes block
+def inject_volumes(content, mounts_str):
+    lines = content.split("
+")
+    in_dedicated = False
+    in_volumes = False
+    last_volume_idx = -1
+
+    for i, line in enumerate(lines):
+        if "q3js-dedicated-server-1:" in line:
+            in_dedicated = True
+        elif in_dedicated and re.match(r"^  [a-z]", line) and "q3js-dedicated-server-1" not in line:
+            in_dedicated = False
+            in_volumes = False
+        if in_dedicated and line.strip() == "volumes:":
+            in_volumes = True
+        if in_volumes and line.strip().startswith("- "):
+            last_volume_idx = i
+        if in_volumes and not line.strip().startswith("- ") and not line.strip() == "volumes:" and line.strip() and last_volume_idx >= 0:
+            in_volumes = False
+
+    if last_volume_idx >= 0:
+        lines.insert(last_volume_idx + 1, mounts_str)
+        return "
+".join(lines)
+    return content
+
+content = inject_volumes(content, mounts_str)
+with open(compose_path, "w") as f:
+    f.write(content)
+print("[Q3JS] Volume mounts injected successfully")
+PYEOF
+
 bashio::log.info "Dedicated server pak mounts:"
-grep -A30 "q3js-dedicated-server" "${COMPOSE_FILE}" | grep "pk3" || true
+grep -A50 "q3js-dedicated-server-1:" "${COMPOSE_FILE}" | grep "pk3\|game.log" | head -20 || true
 
 # NODE_TLS_REJECT_UNAUTHORIZED and port 8443 are now set directly in the
 # fork's compose.yml — no runtime patching needed
