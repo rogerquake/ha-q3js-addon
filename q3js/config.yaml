@@ -1,7 +1,7 @@
 ---
 name: "Q3JS - Quake III Arena"
 description: "Run a Quake III Arena server in the browser using QuakeJS. Manages all game containers via Docker Compose."
-version: "2.7.8"
+version: "2.7.9"
 slug: "q3js"
 url: "https://github.com/rogerquake/ha-q3js-addon"
 init: false
@@ -20,14 +20,15 @@ ports:
 ports_description:
   8090/tcp: "Metrics HTTP API / Ingress (docker compose manages game ports directly)"
 options:
-  map_name: "q3dm17"
-  gamemode: "baseq3"
+  map_name: "ra3map1"  # baseq3: q3dm1-q3dm19 | cpma/ra3: ra3map1-ra3map20
+  gamemode: "cpma"  # options: baseq3, cpma, ra3
   frag_limit: 0
   time_limit: 0
   rcon_password: "homeassistant"
   restart_hours: 0
   ws_port: 27961
   connect_server: ""
+  force_rebuild: false
   bots:
     - name: "Keel"
       skill: 3
@@ -42,6 +43,7 @@ schema:
   restart_hours: int
   ws_port: int
   connect_server: str
+  force_rebuild: bool
   bots:
     - name: str
       skill: "int(1,5)"
